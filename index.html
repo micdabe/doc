@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocScanner AI — Gestione e Riconoscimento Moduli PDF</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- Libreria Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Libreria Mozilla PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+
+  <!-- 1. SCHERMATA DI LOGIN (Password Protection) -->
+  <div id="login-screen" class="login-overlay">
+    <div class="login-card">
+      <div class="login-logo">DOC<span>SCANNER</span></div>
+      <h2>Accesso Riservato</h2>
+      <p>Inserisci la password operativa per accedere allo scanner e al backoffice.</p>
+      <form id="login-form">
+        <input type="password" id="login-password" placeholder="Password di accesso..." required autocomplete="current-password">
+        <div id="login-error" class="error-msg hidden">Password non corretta. Riprova.</div>
+        <button type="submit" class="btn btn-primary btn-full">Accedi al Sistema</button>
+      </form>
+      <div class="login-hint">Password predefinita: <code>admin2026</code> (modificabile in Impostazioni)</div>
+    </div>
+  </div>
+
+  <!-- 2. APPLICAZIONE PRINCIPALE -->
+  <div id="app-container" class="hidden">
+    
+    <!-- Barra Superiore -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-badge">IDP</span>
+        <h1>Scansione Certificati & Moduli</h1>
+      </div>
+      <nav class="nav-tabs">
+        <button class="nav-btn active" data-tab="scanner-view">Scanner PDF</button>
+        <button class="nav-btn" data-tab="backoffice-view">Backoffice Tipologie</button>
+        <button class="nav-btn" data-tab="history-view">Storico Scansioni</button>
+      </nav>
+      <div class="topbar-actions">
+        <span id="db-status-badge" class="status-pill status-warn">DB: Configura</span>
+        <button id="btn-open-settings" class="btn btn-outline btn-sm">⚙️ Connessioni & AI</button>
+        <button id="btn-logout" class="btn btn-ghost btn-sm" title="Esci">Esci</button>
+      </div>
+    </header>
+
+    <!-- VISTA A: SCANNER PDF (Macchina a Stati a 5 Step) -->
+    <main id="scanner-view" class="view-section active">
+      
+      <!-- Stepper Indicatore di Progresso -->
+      <div class="workflow-stepper">
+        <div class="step-item active" id="ind-step-1"><span>1</span> Caricamento PDF</div>
+        <div class="step-line"></div>
+        <div class="step-item" id="ind-step-2"><span>2</span> Calibrazione Pag. 1</div>
+        <div class="step-line"></div>
+        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Totale</div>
+        <div class="step-line"></div>
+        <div class="step-item" id="ind-step-4"><span>4</span> Verifica Somme (Sì/No)</div>
+        <div class="step-line"></div>
+        <div class="step-item" id="ind-step-5"><span>5</span> Revisione / Output</div>
+      </div>
+
+      <!-- STEP 1: Upload File PDF -->
+      <section id="step-upload" class="step-panel">
+        <div class="upload-dropzone" id="dropzone">
+          <div class="upload-icon">📄</div>
+          <h3>Trascina qui il file PDF con i moduli compilati a mano</h3>
+          <p>oppure clicca per selezionare un documento dal computer</p>
+          <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
+          <button class="btn btn-primary" onclick="document.getElementById('pdf-file-input').click()">Seleziona File PDF</button>
+        </div>
+      </section>
+
+      <!-- STEP 2: Calibrazione e Conferma Pagina 1 -->
+      <section id="step-calibrate" class="step-panel hidden">
+        <div class="split-workspace">
+          
+          <!-- Colonna Sinistra: Canvas PDF + Bounding Box disegnabile -->
+          <div class="pdf-viewer-card">
+            <div class="viewer-toolbar">
+              <span class="badge-page"> Analisi Pagina 1 di <strong id="cal-total-pages">1</strong></span>
+              <span class="viewer-hint">💡 Puoi trascinare col mouse sul foglio per ridisegnare il riquadro attorno al numero</span>
+            </div>
+            <div class="canvas-wrapper" id="cal-canvas-wrapper">
+              <canvas id="cal-pdf-canvas"></canvas>
+              <div id="cal-bbox" class="bbox-overlay">
+                <span class="bbox-label" id="cal-bbox-label">Valore</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Colonna Destra: Controlli Riconoscimento Pagina 1 -->
+          <div class="inspector-card">
+            <div class="card-header">
+              <h3>Riconoscimento Primo Certificato</h3>
+              <p>Verifica o correggi i dati estratti dalla prima pagina prima di procedere su tutto il documento.</p>
+            </div>
+
+            <div class="form-group">
+              <label for="cal-type-select">Tipologia di Contenuto Riconosciuta</label>
+              <select id="cal-type-select" class="form-control"></select>
+              <small class="help-text">Le pagine successive erediteranno questa tipologia come priorità probabilistica.</small>
+            </div>
+
+            <div class="form-group">
+              <label for="cal-value-input">Valore Numerico Estratto <span id="cal-unit-label" class="unit-tag"></span></label>
+              <input type="number" step="0.01" id="cal-value-input" class="form-control input-large-number">
+            </div>
+
+            <div class="meta-box">
+              <div>Confidenza Riconoscimento: <strong id="cal-confidence">--</strong></div>
+              <div>Coordinate Riquadro (X, Y, W, H): <code id="cal-coords-display">--</code></div>
+            </div>
+
+            <div class="inspector-actions">
+              <button id="btn-cancel-scan" class="btn btn-outline">Annulla</button>
+              <button id="btn-confirm-page1" class="btn btn-primary btn-lg">
+                Accetta e Analizza Tutto il PDF →
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- STEP 3: Avanzamento Elaborazione Massiva -->
+      <section id="step-processing" class="step-panel hidden">
+        <div class="processing-card">
+          <div class="spinner"></div>
+          <h3>Elaborazione dei certificati in corso...</h3>
+          <p id="proc-status-text">Analisi pagina 2 in corso...</p>
+          <div class="progress-bar-track">
+            <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 4: Riepilogo Somme e Scelta SÌ / NO -->
+      <section id="step-decision" class="step-panel hidden">
+        <div class="decision-card">
+          <div class="decision-header">
+            <h2>Elaborazione Completata — Verifica Preliminare</h2>
+            <p>Ecco la somma dei valori calcolati su tutte le <strong id="dec-total-pages">0</strong> pagine del file <code id="dec-filename"></code>.</p>
+          </div>
+
+          <div class="summary-table-wrapper">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Codice</th>
+                  <th>Tipologia di Contenuto</th>
+                  <th class="text-center">Pagine Trovate</th>
+                  <th class="text-right">Somma Totale Calcolata</th>
+                </tr>
+              </thead>
+              <tbody id="dec-summary-tbody"></tbody>
+            </table>
+          </div>
+
+          <div id="dec-low-conf-alert" class="alert-warning hidden">
+            ⚠️ Attenzione: sono presenti <strong id="dec-low-conf-count">0</strong> pagine con confidenza di lettura inferiore all'85%. Si consiglia la revisione.
+          </div>
+
+          <div class="decision-prompt">
+            <h3>Accetti l'elaborazione totale?</h3>
+            <div class="decision-buttons">
+              <button id="btn-decision-no" class="btn btn-danger-outline btn-lg">
+                ✖ NO — Rivedi Pagina per Pagina
+              </button>
+              <button id="btn-decision-yes" class="btn btn-success btn-lg">
+                ✔ SÌ — Accetta e Genera Output Finale
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 5B (Ramo NO): Revisione Pagina per Pagina -->
+      <section id="step-review" class="step-panel hidden">
+        <div class="review-topbar">
+          <div class="review-nav-controls">
+            <button id="btn-rev-prev" class="btn btn-outline btn-sm">← Pagina Prec.</button>
+            <span class="review-page-counter">Pagina <strong id="rev-curr-page">1</strong> di <strong id="rev-total-pages">1</strong></span>
+            <button id="btn-rev-next" class="btn btn-outline btn-sm">Pagina Succ. →</button>
+          </div>
+          <div class="review-filter">
+            <label class="checkbox-label">
+              <input type="checkbox" id="chk-only-unverified"> Mostra solo pagine da verificare / bassa confidenza
+            </label>
+          </div>
+          <div class="review-live-total">
+            Somma Corrente: <strong id="rev-running-sum">0.00</strong>
+          </div>
+        </div>
+
+        <div class="split-workspace">
+          <!-- Sinistra: Immagine Pagina Corrente -->
+          <div class="pdf-viewer-card">
+            <div class="viewer-toolbar">
+              <span id="rev-status-badge" class="status-pill">Da verificare</span>
+              <span class="viewer-hint">Trascina sul foglio per correggere la posizione del riquadro</span>
+            </div>
+            <div class="canvas-wrapper" id="rev-canvas-wrapper">
+              <canvas id="rev-pdf-canvas"></canvas>
+              <div id="rev-bbox" class="bbox-overlay">
+                <span class="bbox-label" id="rev-bbox-label">Valore</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Destra: Modifica o Accettazione Singola Pagina -->
+          <div class="inspector-card">
+            <div class="card-header">
+              <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
+              <p>Controlla la corrispondenza tra il valore scritto a mano sul modulo e quello letto dal sistema.</p>
+            </div>
+
+            <div class="form-group">
+              <label for="rev-type-select">Tipologia di Contenuto</label>
+              <select id="rev-type-select" class="form-control"></select>
+            </div>
+
+            <div class="form-group">
+              <label for="rev-value-input">Valore Riconosciuto / Modificato <span id="rev-unit-label" class="unit-tag"></span></label>
+              <input type="number" step="0.01" id="rev-value-input" class="form-control input-large-number">
+            </div>
+
+            <div class="form-group">
+              <label for="rev-notes-input">Note Pagina (opzionale)</label>
+              <input type="text" id="rev-notes-input" class="form-control" placeholder="Es. Correzione manuale per calligrafia sbiadita">
+            </div>
+
+            <div class="meta-box">
+              <div>Confidenza AI Originale: <strong id="rev-confidence">--</strong></div>
+            </div>
+
+            <div class="inspector-actions-vertical">
+              <button id="btn-rev-accept-page" class="btn btn-primary btn-full">
+                ✓ Accetta / Salva Pagina e Vai alla Successiva
+              </button>
+              <button id="btn-rev-finish-all" class="btn btn-success btn-full">
+                ✔ Termina Revisione e Genera Output Finale
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 5A (Ramo SÌ o Fine Revisione): Output Finale -->
+      <section id="step-output" class="step-panel hidden">
+        <div class="output-card">
+          <div class="output-header">
+            <div>
+              <span class="status-pill status-ok">ELABORAZIONE CONSOLIDATA</span>
+              <h2>Report Finale Somme per Tipologia</h2>
+              <p>Documento: <strong id="out-filename"></strong> — Totale pagine elaborate: <strong id="out-total-pages"></strong></p>
+            </div>
+            <div class="output-actions">
+              <button id="btn-export-csv" class="btn btn-outline">⬇ Esporta CSV</button>
+              <button id="btn-new-scan" class="btn btn-primary">+ Nuova Scansione PDF</button>
+            </div>
+          </div>
+
+          <!-- Tabella Somme Aggregate per Tipologia -->
+          <h4 class="section-subtitle">Totale Voci per Tipologia</h4>
+          <table class="data-table highlight-table">
+            <thead>
+              <tr>
+                <th>Codice</th>
+                <th>Tipologia di Contenuto</th>
+                <th>Campo Estratto</th>
+                <th class="text-center">N° Certificati</th>
+                <th class="text-right">Somma Totale</th>
+              </tr>
+            </thead>
+            <tbody id="out-totals-tbody"></tbody>
+          </table>
+
+          <!-- Dettaglio analitico delle singole pagine -->
+          <h4 class="section-subtitle" style="margin-top: 2rem;">Dettaglio Analitico Pagina per Pagina</h4>
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Pag.</th>
+                  <th>Tipologia Assegnata</th>
+                  <th class="text-right">Valore</th>
+                  <th class="text-center">Stato Verifica</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="out-pages-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- VISTA B: BACKOFFICE TIPOLOGIE (CRUD Database) -->
+    <main id="backoffice-view" class="view-section hidden">
+      <div class="backoffice-layout">
+        
+        <!-- Form Inserimento / Modifica Tipologia -->
+        <div class="bo-form-card">
+          <h3 id="bo-form-title">Nuova Tipologia di Contenuto</h3>
+          <form id="bo-type-form">
+            <input type="hidden" id="bo-type-id">
+            
+            <div class="form-group">
+              <label for="bo-code">Codice Identificativo *</label>
+              <input type="text" id="bo-code" class="form-control" placeholder="Es. CERT-TAR" required>
+            </div>
+
+            <div class="form-group">
+              <label for="bo-name">Nome Tipologia / Certificato *</label>
+              <input type="text" id="bo-name" class="form-control" placeholder="Es. Certificato di Taratura Valvole" required>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="bo-field-label">Etichetta Campo Valore *</label>
+                <input type="text" id="bo-field-label" class="form-control" placeholder="Es. Pressione Bar" required>
+              </div>
+              <div class="form-group" style="max-width: 110px;">
+                <label for="bo-unit">Unità Misura</label>
+                <input type="text" id="bo-unit" class="form-control" placeholder="bar, Kg, h">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="bo-hints">Istruzioni AI / Parole Chiave sul Modulo</label>
+              <textarea id="bo-hints" rows="3" class="form-control" placeholder="Descrivi dove si trova il valore scritto a mano o quali parole stampate ci sono vicino..."></textarea>
+            </div>
+
+            <div class="form-actions">
+              <button type="button" id="btn-bo-reset" class="btn btn-outline">Annulla / Nuovo</button>
+              <button type="submit" class="btn btn-primary">Salva nel Database</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Tabella Tipologie Esistenti -->
+        <div class="bo-list-card">
+          <div class="card-header-flex">
+            <div>
+              <h3>Tipologie Configurate a Sistema</h3>
+              <p>Elenco sincronizzato con la tabella <code>doc_content_types</code>.</p>
+            </div>
+            <button id="btn-bo-refresh" class="btn btn-outline btn-sm">↻ Aggiorna</button>
+          </div>
+
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Codice</th>
+                <th>Nome Tipologia</th>
+                <th>Campo Valore</th>
+                <th>Istruzioni OCR / AI</th>
+                <th class="text-right">Azioni</th>
+              </tr>
+            </thead>
+            <tbody id="bo-types-tbody"></tbody>
+          </table>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- VISTA C: STORICO SCANSIONI -->
+    <main id="history-view" class="view-section hidden">
+      <div class="output-card">
+        <div class="card-header-flex">
+          <div>
+            <h3>Storico Sessioni Elaborate</h3>
+            <p>Archivio dei file PDF registrati nella tabella <code>doc_batches</code>.</p>
+          </div>
+          <button id="btn-hist-refresh" class="btn btn-outline btn-sm">↻ Ricarica Storico</button>
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Nome File PDF</th>
+              <th class="text-center">Pagine</th>
+              <th>Tipologia Prevalente</th>
+              <th>Stato</th>
+            </tr>
+          </thead>
+          <tbody id="hist-tbody"></tbody>
+        </table>
+      </div>
+    </main>
+
+  </div>
+
+  <!-- MODALE DI CONFIGURAZIONE (Supabase + API Vision + Cambio Password) -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚙️ Configurazione Connessioni & Sicurezza</h3>
+        <button id="btn-close-settings" class="btn-close">×</button>
+      </div>
+      <div class="modal-body">
+        <p class="help-text" style="margin-bottom: 1rem;">
+          Le chiavi vengono salvate localmente nel tuo browser (<code>localStorage</code>) così non vengono mai esposte nel codice pubblico su GitHub.
+        </p>
+
+        <div class="form-group">
+          <label>Supabase Project URL</label>
+          <input type="url" id="cfg-supabase-url" class="form-control" placeholder="https://tuo-progetto.supabase.co">
+        </div>
+
+        <div class="form-group">
+          <label>Supabase Anon Public Key</label>
+          <input type="password" id="cfg-supabase-key" class="form-control" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
+        </div>
+
+        <hr class="divider">
+
+        <div class="form-group">
+          <label>Modalità Motore di Riconoscimento (OCR Scrittura a Mano)</label>
+          <select id="cfg-ocr-mode" class="form-control">
+            <option value="simulation">Modalità Simulazione Intelligente (Test immediato senza API Key)</option>
+            <option value="gemini">Google Gemini 2.5 Flash Vision API (Lettura reale calligrafia)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Gemini API Key (opzionale, per lettura reale scrittura a mano)</label>
+          <input type="password" id="cfg-gemini-key" class="form-control" placeholder="AIzaSy...">
+        </div>
+
+        <hr class="divider">
+
+        <div class="form-group">
+          <label>Password di Accesso all'Applicazione</label>
+          <input type="text" id="cfg-app-password" class="form-control" placeholder="admin2026">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-settings" class="btn btn-primary">Salva e Riconnetti</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="api-service.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
