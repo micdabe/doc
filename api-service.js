@@ -1,6 +1,7 @@
 /**
  * API SERVICE LAYER (Database, Password su DB & Supabase Edge Function AI/OCR)
  * Legge i parametri esclusivamente da window.DOCSCANNER_CONFIG (definito in config.js).
+ * Include persistenza dell'apprendimento (coordinate + esempi corretti dall'utente).
  */
 
 const ApiService = {
@@ -8,10 +9,8 @@ const ApiService = {
   config: {},
 
   init() {
-    // Legge esclusivamente dal file config.js
     this.config = { ...(window.DOCSCANNER_CONFIG || {}) };
 
-    // Eventuali override temporanei salvati dal pannello Impostazioni nel browser
     const savedRaw = localStorage.getItem('docscanner_config');
     if (savedRaw) {
       try {
@@ -61,7 +60,6 @@ const ApiService = {
         if (!error && data && data.value) {
           return inputPassword === data.value;
         }
-        console.warn('Tabella doc_app_settings non trovata o vuota, uso fallback locale:', error);
       } catch (err) {
         console.warn('Errore lettura password da Supabase:', err);
       }
@@ -88,7 +86,7 @@ const ApiService = {
   },
 
   // =========================================================================
-  // 1. GESTIONE TIPOLOGIE DI CONTENUTO (Tabella: doc_content_types)
+  // 1. GESTIONE TIPOLOGIE E APPRENDIMENTO CONTINUO (Tabella: doc_content_types)
   // =========================================================================
   async getContentTypes() {
     if (this.supabase) {
@@ -98,14 +96,13 @@ const ApiService = {
         .eq('is_active', true)
         .order('code', { ascending: true });
       if (!error && data) return data;
-      console.warn('Fallback locale per getContentTypes:', error);
     }
     const local = localStorage.getItem('docscanner_fallback_types');
     if (local) return JSON.parse(local);
     const seed = [
-      { id: 'type-1', code: 'CERT-MAT', name: 'Certificato Collaudo Materiali', target_field_label: 'Quantità Collaudata', unit: 'pz', ai_hints: 'Casella in basso a destra Totale Pezzi', expected_box: { x: 65, y: 72, w: 20, h: 7 } },
-      { id: 'type-2', code: 'BOLLA-CARICO', name: 'Bolla Consegna Calcestruzzo / Inerti', target_field_label: 'Volume Scaricato', unit: 'm³', ai_hints: 'Voce Metri Cubi sezione Scarico Cantiere', expected_box: { x: 58, y: 60, w: 22, h: 7 } },
-      { id: 'type-3', code: 'RAPP-ORE', name: 'Rapportino Giornaliero Manodopera', target_field_label: 'Totale Ore Squadra', unit: 'h', ai_hints: 'Somma ore in fondo alla tabella presenze', expected_box: { x: 70, y: 80, w: 18, h: 6 } }
+      { id: 'type-1', code: 'CERT-MAT', name: 'Certificato Collaudo Materiali', target_field_label: 'Quantità Collaudata', unit: 'pz', ai_hints: 'Casella in basso a destra Totale Pezzi', expected_box: { x: 65, y: 72, w: 20, h: 7 }, learned_examples: [] },
+      { id: 'type-2', code: 'BOLLA-CARICO', name: 'Bolla Consegna Calcestruzzo / Inerti', target_field_label: 'Volume Scaricato', unit: 'm³', ai_hints: 'Voce Metri Cubi sezione Scarico Cantiere', expected_box: { x: 58, y: 60, w: 22, h: 7 }, learned_examples: [] },
+      { id: 'type-3', code: 'RAPP-ORE', name: 'Rapportino Giornaliero Manodopera', target_field_label: 'Totale Ore Squadra', unit: 'h', ai_hints: 'Somma ore in fondo alla tabella presenze', expected_box: { x: 70, y: 80, w: 18, h: 6 }, learned_examples: [] }
     ];
     localStorage.setItem('docscanner_fallback_types', JSON.stringify(seed));
     return seed;
@@ -114,17 +111,21 @@ const ApiService = {
   async saveContentType(typeObj) {
     if (this.supabase) {
       if (typeObj.id && !String(typeObj.id).startsWith('local-') && !String(typeObj.id).startsWith('type-')) {
+        const updatePayload = {
+          code: typeObj.code,
+          name: typeObj.name,
+          target_field_label: typeObj.target_field_label,
+          unit: typeObj.unit,
+          ai_hints: typeObj.ai_hints,
+          expected_box: typeObj.expected_box || null,
+          updated_at: new Date().toISOString()
+        };
+        if (typeObj.learned_examples !== undefined) {
+          updatePayload.learned_examples = typeObj.learned_examples;
+        }
         const { data, error } = await this.supabase
           .from('doc_content_types')
-          .update({
-            code: typeObj.code,
-            name: typeObj.name,
-            target_field_label: typeObj.target_field_label,
-            unit: typeObj.unit,
-            ai_hints: typeObj.ai_hints,
-            expected_box: typeObj.expected_box || null,
-            updated_at: new Date().toISOString()
-          })
+          .update(updatePayload)
           .eq('id', typeObj.id)
           .select()
           .single();
@@ -138,7 +139,8 @@ const ApiService = {
             name: typeObj.name,
             target_field_label: typeObj.target_field_label,
             unit: typeObj.unit,
-            ai_hints: typeObj.ai_hints
+            ai_hints: typeObj.ai_hints,
+            learned_examples: typeObj.learned_examples || []
           }])
           .select()
           .single();
@@ -156,6 +158,31 @@ const ApiService = {
     }
     localStorage.setItem('docscanner_fallback_types', JSON.stringify(list));
     return typeObj;
+  },
+
+  /**
+   * Registra una correzione umana (box + valore corretto) nella memoria storica della tipologia
+   * su Supabase in modo che le scansioni future migliorino progressivamente.
+   */
+  async recordHumanCorrection(typeObj, correctionExample) {
+    if (!typeObj) return;
+    const history = Array.isArray(typeObj.learned_examples) ? [...typeObj.learned_examples] : [];
+    history.push({
+      confirmed_value: correctionExample.confirmed_value,
+      ai_initial_value: correctionExample.ai_initial_value,
+      box: correctionExample.box,
+      note: correctionExample.note || '',
+      timestamp: new Date().toISOString()
+    });
+    // Mantiene gli ultimi 15 esempi validati per ciascuna tipologia
+    typeObj.learned_examples = history.slice(-15);
+    typeObj.expected_box = correctionExample.box;
+
+    try {
+      await this.saveContentType(typeObj);
+    } catch (err) {
+      console.warn('Impossibile salvare la memoria di apprendimento su DB:', err);
+    }
   },
 
   async deleteContentType(id) {
@@ -222,18 +249,19 @@ const ApiService = {
   },
 
   // =========================================================================
-  // 3. MOTORE DI RICONOSCIMENTO MODULI SCRITTI A MANO (Supabase Edge Function)
+  // 3. MOTORE DI RICONOSCIMENTO ADATTIVO (Edge Function + Ritaglio Mirato)
   // =========================================================================
-  async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null) {
+  async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null) {
     if ((this.config.ocrMode === 'edge_gemini' || this.config.ocrMode === 'gemini') && this.supabase) {
       try {
-        return await this._callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext);
+        return await this._callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url);
       } catch (err) {
         console.error('Errore chiamata Edge Function Vision, passo a simulazione:', err);
       }
     }
 
-    await new Promise(res => setTimeout(res, 300));
+    // Simulazione adattiva (usa subito targetBox se l'utente ha spostato il riquadro)
+    await new Promise(res => setTimeout(res, 250));
 
     let chosenType = availableTypes[0];
     if (priorContext && priorContext.primaryTypeId) {
@@ -241,32 +269,37 @@ const ApiService = {
       if (found) chosenType = found;
     }
 
-    const defaultBox = (priorContext && priorContext.referenceBox)
-      ? { ...priorContext.referenceBox }
-      : (chosenType?.expected_box || { x: 62, y: 72, w: 22, h: 7 });
+    const activeBox = targetBox
+      ? { ...targetBox }
+      : ((priorContext && priorContext.referenceBox)
+        ? { ...priorContext.referenceBox }
+        : (chosenType?.expected_box || { x: 62, y: 72, w: 22, h: 7 }));
 
     const randomVal = Number((Math.random() * 85 + 15).toFixed(2));
-    const isLowConf = pageNumber > 1 && pageNumber % 4 === 0;
-    const confidence = isLowConf ? 0.76 : Number((0.91 + Math.random() * 0.08).toFixed(2));
+    const isLowConf = !targetBox && pageNumber > 1 && pageNumber % 4 === 0;
+    const confidence = targetBox ? 0.96 : (isLowConf ? 0.76 : Number((0.91 + Math.random() * 0.08).toFixed(2)));
 
     return {
       detected_type_id: chosenType ? chosenType.id : null,
       detected_value: randomVal,
-      bounding_box: defaultBox,
+      bounding_box: activeBox,
       confidence: confidence
     };
   },
 
-  async _callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext) {
+  async _callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url) {
     const base64Clean = base64DataUrl.split(',')[1];
+    const croppedBase64Clean = croppedBase64Url ? croppedBase64Url.split(',')[1] : null;
     const fnName = this.config.edgeFunctionName || 'analyze-doc';
 
     const { data, error } = await this.supabase.functions.invoke(fnName, {
       body: {
         base64Clean,
+        croppedBase64Clean,
         pageNumber,
         availableTypes,
-        priorContext
+        priorContext,
+        targetBox
       }
     });
 
@@ -276,7 +309,7 @@ const ApiService = {
     return {
       detected_type_id: data.detected_type_id || availableTypes[0]?.id,
       detected_value: Number(data.detected_value) || 0,
-      bounding_box: data.bounding_box || { x: 60, y: 70, w: 20, h: 7 },
+      bounding_box: targetBox || data.bounding_box || { x: 60, y: 70, w: 20, h: 7 },
       confidence: Number(data.confidence) || 0.90
     };
   }

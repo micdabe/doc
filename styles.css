@@ -177,7 +177,7 @@ body {
 .upload-dropzone h3 { margin-bottom: 0.5rem; }
 .upload-dropzone p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
 
-/* --- SPLIT WORKSPACE (PDF a sinistra, Dati a destra) --- */
+/* --- SPLIT WORKSPACE --- */
 .split-workspace {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
@@ -208,7 +208,7 @@ body {
   color: var(--text-muted);
   margin-bottom: 0.75rem;
   background: #f8fafc;
-  padding: 0.4rem 0.65rem;
+  padding: 0.45rem 0.65rem;
   border-radius: 4px;
   border: 1px solid var(--border);
 }
@@ -254,7 +254,6 @@ body {
   background: rgba(239, 68, 68, 0.18);
   pointer-events: none;
   box-shadow: 0 0 0 2px rgba(255,255,255,0.7);
-  transition: all 0.08s ease-out;
 }
 .bbox-label {
   position: absolute;
@@ -269,11 +268,46 @@ body {
   white-space: nowrap;
 }
 
+/* --- ZOOM CROP PREVIEW --- */
+.crop-preview-box {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.65rem;
+  margin-bottom: 1.15rem;
+}
+.crop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 0.45rem;
+}
+.learned-badge {
+  background: #e0f2fe;
+  color: #0369a1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-weight: 700;
+}
+.crop-canvas {
+  display: block;
+  width: 100%;
+  max-height: 95px;
+  object-fit: contain;
+  background: #ffffff;
+  border: 1px dashed #cbd5e1;
+  border-radius: 4px;
+}
+
 /* --- FORM & CONTROLLI --- */
-.card-header { margin-bottom: 1.25rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+.card-header { margin-bottom: 1.1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+.header-with-status { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .card-header p { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem; }
 
-.form-group { margin-bottom: 1.15rem; }
+.form-group { margin-bottom: 1.1rem; }
 .form-group label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.4rem; }
 .form-control {
   width: 100%;
@@ -334,7 +368,7 @@ body {
 .btn-full { width: 100%; }
 
 .inspector-actions { display: flex; justify-content: space-between; gap: 0.75rem; }
-.inspector-actions-vertical { display: flex; flex-direction: column; gap: 0.75rem; }
+.inspector-actions-vertical { display: flex; flex-direction: column; gap: 0.65rem; }
 
 /* --- TABELLE & DECISION GATE --- */
 .decision-card, .output-card { max-width: 960px; margin: 0 auto; }

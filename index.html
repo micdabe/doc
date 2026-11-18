@@ -5,14 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DocScanner AI — Gestione e Riconoscimento Moduli PDF</title>
   <link rel="stylesheet" href="styles.css">
-  <!-- Libreria Supabase -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <!-- Libreria Mozilla PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 <body>
 
-  <!-- 1. SCHERMATA DI LOGIN (Password verificata sul Database Supabase) -->
+  <!-- 1. SCHERMATA DI LOGIN -->
   <div id="login-screen" class="login-overlay">
     <div class="login-card">
       <div class="login-logo">DOC<span>SCANNER</span></div>
@@ -33,12 +31,12 @@
     <!-- Barra Superiore -->
     <header class="topbar">
       <div class="brand">
-        <span class="brand-badge">IDP</span>
+        <span class="brand-badge">IDP + AI</span>
         <h1>Scansione Certificati & Moduli</h1>
       </div>
       <nav class="nav-tabs">
         <button class="nav-btn active" data-tab="scanner-view">Scanner PDF</button>
-        <button class="nav-btn" data-tab="backoffice-view">Backoffice Tipologie</button>
+        <button class="nav-btn" data-tab="backoffice-view">Backoffice & Memoria AI</button>
         <button class="nav-btn" data-tab="history-view">Storico Scansioni</button>
       </nav>
       <div class="topbar-actions">
@@ -48,7 +46,7 @@
       </div>
     </header>
 
-    <!-- VISTA A: SCANNER PDF (Macchina a Stati a 5 Step) -->
+    <!-- VISTA A: SCANNER PDF -->
     <main id="scanner-view" class="view-section active">
       
       <!-- Stepper Indicatore di Progresso -->
@@ -57,7 +55,7 @@
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-2"><span>2</span> Calibrazione Pag. 1</div>
         <div class="step-line"></div>
-        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Totale</div>
+        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Adattiva</div>
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-4"><span>4</span> Verifica Somme (Sì/No)</div>
         <div class="step-line"></div>
@@ -91,7 +89,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>💡 Se il certificato è storto o capovolto, ruotalo coi pulsanti sopra. Trascina col mouse sul foglio per spostare il riquadro rosso sul numero.</span>
+              <span>🎯 <strong>Riconoscimento al rilascio:</strong> ridisegna o sposta il riquadro rosso sul numero e l'OCR rileggerà automaticamente quella zona.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -104,21 +102,32 @@
           <!-- Colonna Destra: Controlli Riconoscimento Pagina 1 -->
           <div class="inspector-card">
             <div class="card-header">
-              <h3>Riconoscimento Primo Certificato</h3>
-              <p>Verifica o correggi i dati estratti dalla prima pagina prima di procedere su tutto il documento.</p>
+              <div class="header-with-status">
+                <h3>Riconoscimento Primo Certificato</h3>
+                <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+              </div>
+              <p>Ogni correzione sulla posizione o sul valore viene memorizzata per addestrare le pagine successive.</p>
+            </div>
+
+            <!-- Anteprima Ingrandita (Crop) del Riquadro Selezionato -->
+            <div class="crop-preview-box">
+              <div class="crop-header">
+                <span>🔍 Zoom Area Riquadro Selezionato</span>
+                <small id="cal-learned-count-badge" class="learned-badge">0 esempi appresi</small>
+              </div>
+              <canvas id="cal-crop-canvas" class="crop-canvas"></canvas>
             </div>
 
             <div class="form-group">
               <label for="cal-type-select">Tipologia di Contenuto Riconosciuta</label>
               <select id="cal-type-select" class="form-control"></select>
-              <small class="help-text">Le pagine successive erediteranno questa tipologia e l'eventuale rotazione.</small>
             </div>
 
             <div class="form-group">
               <label for="cal-value-input">Valore Numerico Estratto <span id="cal-unit-label" class="unit-tag"></span></label>
               <div class="input-with-action">
                 <input type="number" step="0.01" id="cal-value-input" class="form-control input-large-number">
-                <button type="button" id="btn-cal-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR dopo aver ruotato la pagina">↻ Rileggi Pagina</button>
+                <button type="button" id="btn-cal-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR">↻ Rileggi</button>
               </div>
             </div>
 
@@ -131,7 +140,7 @@
             <div class="inspector-actions">
               <button id="btn-cancel-scan" class="btn btn-outline">Annulla</button>
               <button id="btn-confirm-page1" class="btn btn-primary btn-lg">
-                Accetta e Analizza Tutto il PDF →
+                Apprendi e Analizza Tutto il PDF →
               </button>
             </div>
           </div>
@@ -143,7 +152,7 @@
       <section id="step-processing" class="step-panel hidden">
         <div class="processing-card">
           <div class="spinner"></div>
-          <h3>Elaborazione dei certificati in corso...</h3>
+          <h3>Elaborazione adattiva dei certificati in corso...</h3>
           <p id="proc-status-text">Analisi pagina 2 in corso...</p>
           <div class="progress-bar-track">
             <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
@@ -191,7 +200,7 @@
         </div>
       </section>
 
-      <!-- STEP 5B (Ramo NO): Revisione Pagina per Pagina -->
+      <!-- STEP 5B (Ramo NO): Revisione Pagina per Pagina con Apprendimento Continuo -->
       <section id="step-review" class="step-panel hidden">
         <div class="review-topbar">
           <div class="review-nav-controls">
@@ -222,7 +231,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>Ruota il foglio se necessario o trascina col mouse per riposizionare il riquadro sul valore scritto a mano.</span>
+              <span>🎯 Trascina sul foglio per riposizionare il riquadro: l'OCR rileggerà subito l'area e aggiornerà il modello per le pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -235,8 +244,20 @@
           <!-- Destra: Modifica o Accettazione Singola Pagina -->
           <div class="inspector-card">
             <div class="card-header">
-              <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
-              <p>Controlla la corrispondenza tra il valore scritto a mano sul modulo e quello letto dal sistema.</p>
+              <div class="header-with-status">
+                <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
+                <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+              </div>
+              <p>Se modifichi il riquadro o il valore, il sistema apprende la correzione e può ri-calibrare le pagine non ancora verificate.</p>
+            </div>
+
+            <!-- Anteprima Ingrandita (Crop) -->
+            <div class="crop-preview-box">
+              <div class="crop-header">
+                <span>🔍 Zoom Area Riquadro Selezionato</span>
+                <small id="rev-session-learn-badge" class="learned-badge">0 correzioni apprese</small>
+              </div>
+              <canvas id="rev-crop-canvas" class="crop-canvas"></canvas>
             </div>
 
             <div class="form-group">
@@ -248,23 +269,26 @@
               <label for="rev-value-input">Valore Riconosciuto / Modificato <span id="rev-unit-label" class="unit-tag"></span></label>
               <div class="input-with-action">
                 <input type="number" step="0.01" id="rev-value-input" class="form-control input-large-number">
-                <button type="button" id="btn-rev-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR sulla pagina ruotata">↻ Rileggi</button>
+                <button type="button" id="btn-rev-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR">↻ Rileggi</button>
               </div>
             </div>
 
             <div class="form-group">
               <label for="rev-notes-input">Note Pagina (opzionale)</label>
-              <input type="text" id="rev-notes-input" class="form-control" placeholder="Es. Pagina ruotata di 180° e valore corretto">
+              <input type="text" id="rev-notes-input" class="form-control" placeholder="Es. Correzione manuale">
             </div>
 
             <div class="meta-box">
-              <div>Confidenza AI Originale: <strong id="rev-confidence">--</strong></div>
+              <div>Confidenza AI: <strong id="rev-confidence">--</strong></div>
               <div>Orientamento Pagina: <strong id="rev-rot-meta">0°</strong></div>
             </div>
 
             <div class="inspector-actions-vertical">
               <button id="btn-rev-accept-page" class="btn btn-primary btn-full">
-                ✓ Accetta / Salva Pagina e Vai alla Successiva
+                ✓ Salva Correzione, Addestra AI e Vai alla Successiva
+              </button>
+              <button id="btn-rev-reapply-remaining" class="btn btn-outline btn-full hidden">
+                🧠 Rianalizza Pagine Successive Non Verificate con Nuove Regole
               </button>
               <button id="btn-rev-finish-all" class="btn btn-success btn-full">
                 ✔ Termina Revisione e Genera Output Finale
@@ -289,7 +313,6 @@
             </div>
           </div>
 
-          <!-- Tabella Somme Aggregate per Tipologia -->
           <h4 class="section-subtitle">Totale Voci per Tipologia</h4>
           <table class="data-table highlight-table">
             <thead>
@@ -304,7 +327,6 @@
             <tbody id="out-totals-tbody"></tbody>
           </table>
 
-          <!-- Dettaglio analitico delle singole pagine -->
           <h4 class="section-subtitle" style="margin-top: 2rem;">Dettaglio Analitico Pagina per Pagina</h4>
           <div class="table-scroll">
             <table class="data-table">
@@ -326,11 +348,10 @@
 
     </main>
 
-    <!-- VISTA B: BACKOFFICE TIPOLOGIE (CRUD Database) -->
+    <!-- VISTA B: BACKOFFICE TIPOLOGIE & MEMORIA AI -->
     <main id="backoffice-view" class="view-section hidden">
       <div class="backoffice-layout">
         
-        <!-- Form Inserimento / Modifica Tipologia -->
         <div class="bo-form-card">
           <h3 id="bo-form-title">Nuova Tipologia di Contenuto</h3>
           <form id="bo-type-form">
@@ -369,12 +390,11 @@
           </form>
         </div>
 
-        <!-- Tabella Tipologie Esistenti -->
         <div class="bo-list-card">
           <div class="card-header-flex">
             <div>
-              <h3>Tipologie Configurate a Sistema</h3>
-              <p>Elenco sincronizzato con la tabella <code>doc_content_types</code>.</p>
+              <h3>Tipologie Configurate & Memoria Appresa</h3>
+              <p>Il sistema aggiorna automaticamente coordinate ed esempi ogni volta che correggi una lettura.</p>
             </div>
             <button id="btn-bo-refresh" class="btn btn-outline btn-sm">↻ Aggiorna</button>
           </div>
@@ -385,7 +405,7 @@
                 <th>Codice</th>
                 <th>Nome Tipologia</th>
                 <th>Campo Valore</th>
-                <th>Istruzioni OCR / AI</th>
+                <th>Memoria Appresa (DB)</th>
                 <th class="text-right">Azioni</th>
               </tr>
             </thead>
@@ -423,7 +443,7 @@
 
   </div>
 
-  <!-- MODALE DI CONFIGURAZIONE (Connessione DB + Cambio Password sul DB) -->
+  <!-- MODALE DI CONFIGURAZIONE -->
   <div id="settings-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <div class="modal-header">
@@ -465,19 +485,16 @@
         <div class="form-group">
           <label>Nuova Password di Accesso (salvata su Database Supabase)</label>
           <input type="text" id="cfg-app-password" class="form-control" placeholder="Inserisci nuova password...">
-          <small class="help-text">Modificando questo campo aggiornerai direttamente la password per tutti gli utenti.</small>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="btn-reset-config-file" class="btn btn-outline btn-sm" title="Ripristina i valori scritti dentro config.js">Ripristina da config.js</button>
+        <button id="btn-reset-config-file" class="btn btn-outline btn-sm">Ripristina da config.js</button>
         <button id="btn-save-settings" class="btn btn-primary">Salva e Aggiorna DB</button>
       </div>
     </div>
   </div>
 
-  <!-- 1. File separato di configurazione database -->
   <script src="config.js"></script>
-  <!-- 2. Logica API e App -->
   <script src="api-service.js"></script>
   <script src="app.js"></script>
 </body>
