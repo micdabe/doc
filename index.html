@@ -12,7 +12,7 @@
 </head>
 <body>
 
-  <!-- 1. SCHERMATA DI LOGIN (Password Protection) -->
+  <!-- 1. SCHERMATA DI LOGIN (Password verificata sul Database Supabase) -->
   <div id="login-screen" class="login-overlay">
     <div class="login-card">
       <div class="login-logo">DOC<span>SCANNER</span></div>
@@ -21,9 +21,9 @@
       <form id="login-form">
         <input type="password" id="login-password" placeholder="Password di accesso..." required autocomplete="current-password">
         <div id="login-error" class="error-msg hidden">Password non corretta. Riprova.</div>
-        <button type="submit" class="btn btn-primary btn-full">Accedi al Sistema</button>
+        <button type="submit" id="btn-login-submit" class="btn btn-primary btn-full">Accedi al Sistema</button>
       </form>
-      <div class="login-hint">Password predefinita: <code>admin2026</code> (modificabile in Impostazioni)</div>
+      <div id="login-db-hint" class="login-hint">Verifica password sincronizzata con il database</div>
     </div>
   </div>
 
@@ -43,7 +43,7 @@
       </nav>
       <div class="topbar-actions">
         <span id="db-status-badge" class="status-pill status-warn">DB: Configura</span>
-        <button id="btn-open-settings" class="btn btn-outline btn-sm">⚙️ Connessioni & AI</button>
+        <button id="btn-open-settings" class="btn btn-outline btn-sm">⚙️ Connessioni & Password</button>
         <button id="btn-logout" class="btn btn-ghost btn-sm" title="Esci">Esci</button>
       </div>
     </header>
@@ -79,11 +79,19 @@
       <section id="step-calibrate" class="step-panel hidden">
         <div class="split-workspace">
           
-          <!-- Colonna Sinistra: Canvas PDF + Bounding Box disegnabile -->
+          <!-- Colonna Sinistra: Canvas PDF + Controlli Rotazione + Bounding Box -->
           <div class="pdf-viewer-card">
             <div class="viewer-toolbar">
-              <span class="badge-page"> Analisi Pagina 1 di <strong id="cal-total-pages">1</strong></span>
-              <span class="viewer-hint">💡 Puoi trascinare col mouse sul foglio per ridisegnare il riquadro attorno al numero</span>
+              <span class="badge-page">Analisi Pagina 1 di <strong id="cal-total-pages">1</strong></span>
+              <div class="rotation-controls">
+                <button type="button" id="btn-cal-rot-ccw" class="btn btn-outline btn-xs" title="Ruota 90° in senso antiorario">↺ 90° Antiorario</button>
+                <button type="button" id="btn-cal-rot-180" class="btn btn-outline btn-xs" title="Capovolgi pagina di 180°">⇅ Capovolgi 180°</button>
+                <button type="button" id="btn-cal-rot-cw" class="btn btn-outline btn-xs" title="Ruota 90° in senso orario">↻ 90° Orario</button>
+                <span id="cal-rot-badge" class="rot-pill">0°</span>
+              </div>
+            </div>
+            <div class="viewer-subbar">
+              <span>💡 Se il certificato è storto o capovolto, ruotalo coi pulsanti sopra. Trascina col mouse sul foglio per spostare il riquadro rosso sul numero.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -103,16 +111,20 @@
             <div class="form-group">
               <label for="cal-type-select">Tipologia di Contenuto Riconosciuta</label>
               <select id="cal-type-select" class="form-control"></select>
-              <small class="help-text">Le pagine successive erediteranno questa tipologia come priorità probabilistica.</small>
+              <small class="help-text">Le pagine successive erediteranno questa tipologia e l'eventuale rotazione.</small>
             </div>
 
             <div class="form-group">
               <label for="cal-value-input">Valore Numerico Estratto <span id="cal-unit-label" class="unit-tag"></span></label>
-              <input type="number" step="0.01" id="cal-value-input" class="form-control input-large-number">
+              <div class="input-with-action">
+                <input type="number" step="0.01" id="cal-value-input" class="form-control input-large-number">
+                <button type="button" id="btn-cal-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR dopo aver ruotato la pagina">↻ Rileggi Pagina</button>
+              </div>
             </div>
 
             <div class="meta-box">
               <div>Confidenza Riconoscimento: <strong id="cal-confidence">--</strong></div>
+              <div>Orientamento Pagina: <strong id="cal-rot-meta">0° (Normale)</strong></div>
               <div>Coordinate Riquadro (X, Y, W, H): <code id="cal-coords-display">--</code></div>
             </div>
 
@@ -198,11 +210,19 @@
         </div>
 
         <div class="split-workspace">
-          <!-- Sinistra: Immagine Pagina Corrente -->
+          <!-- Sinistra: Immagine Pagina Corrente + Controlli Rotazione -->
           <div class="pdf-viewer-card">
             <div class="viewer-toolbar">
               <span id="rev-status-badge" class="status-pill">Da verificare</span>
-              <span class="viewer-hint">Trascina sul foglio per correggere la posizione del riquadro</span>
+              <div class="rotation-controls">
+                <button type="button" id="btn-rev-rot-ccw" class="btn btn-outline btn-xs" title="Ruota 90° in senso antiorario">↺ 90° Antiorario</button>
+                <button type="button" id="btn-rev-rot-180" class="btn btn-outline btn-xs" title="Capovolgi pagina di 180°">⇅ Capovolgi 180°</button>
+                <button type="button" id="btn-rev-rot-cw" class="btn btn-outline btn-xs" title="Ruota 90° in senso orario">↻ 90° Orario</button>
+                <span id="rev-rot-badge" class="rot-pill">0°</span>
+              </div>
+            </div>
+            <div class="viewer-subbar">
+              <span>Ruota il foglio se necessario o trascina col mouse per riposizionare il riquadro sul valore scritto a mano.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -226,16 +246,20 @@
 
             <div class="form-group">
               <label for="rev-value-input">Valore Riconosciuto / Modificato <span id="rev-unit-label" class="unit-tag"></span></label>
-              <input type="number" step="0.01" id="rev-value-input" class="form-control input-large-number">
+              <div class="input-with-action">
+                <input type="number" step="0.01" id="rev-value-input" class="form-control input-large-number">
+                <button type="button" id="btn-rev-reanalyze" class="btn btn-outline btn-sm" title="Riesegui lettura OCR sulla pagina ruotata">↻ Rileggi</button>
+              </div>
             </div>
 
             <div class="form-group">
               <label for="rev-notes-input">Note Pagina (opzionale)</label>
-              <input type="text" id="rev-notes-input" class="form-control" placeholder="Es. Correzione manuale per calligrafia sbiadita">
+              <input type="text" id="rev-notes-input" class="form-control" placeholder="Es. Pagina ruotata di 180° e valore corretto">
             </div>
 
             <div class="meta-box">
               <div>Confidenza AI Originale: <strong id="rev-confidence">--</strong></div>
+              <div>Orientamento Pagina: <strong id="rev-rot-meta">0°</strong></div>
             </div>
 
             <div class="inspector-actions-vertical">
@@ -288,6 +312,7 @@
                 <tr>
                   <th>Pag.</th>
                   <th>Tipologia Assegnata</th>
+                  <th class="text-center">Rotazione</th>
                   <th class="text-right">Valore</th>
                   <th class="text-center">Stato Verifica</th>
                   <th>Note</th>
@@ -398,16 +423,16 @@
 
   </div>
 
-  <!-- MODALE DI CONFIGURAZIONE (Supabase + API Vision + Cambio Password) -->
+  <!-- MODALE DI CONFIGURAZIONE (Connessione DB + Cambio Password sul DB) -->
   <div id="settings-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>⚙️ Configurazione Connessioni & Sicurezza</h3>
+        <h3>⚙️ Configurazione Connessioni & Password Database</h3>
         <button id="btn-close-settings" class="btn-close">×</button>
       </div>
       <div class="modal-body">
         <p class="help-text" style="margin-bottom: 1rem;">
-          Le chiavi vengono salvate localmente nel tuo browser (<code>localStorage</code>) così non vengono mai esposte nel codice pubblico su GitHub.
+          I parametri di connessione provengono da <code>config.js</code>. La password di accesso è salvata nella tabella <code>doc_app_settings</code> su Supabase.
         </p>
 
         <div class="form-group">
@@ -425,29 +450,34 @@
         <div class="form-group">
           <label>Modalità Motore di Riconoscimento (OCR Scrittura a Mano)</label>
           <select id="cfg-ocr-mode" class="form-control">
-            <option value="simulation">Modalità Simulazione Intelligente (Test immediato senza API Key)</option>
-            <option value="gemini">Google Gemini 2.5 Flash Vision API (Lettura reale calligrafia)</option>
+            <option value="edge_gemini">Supabase Edge Function (analyze-doc -> Gemini 2.5 Flash)</option>
+            <option value="simulation">Modalità Simulazione Locale (Test senza AI)</option>
           </select>
         </div>
 
         <div class="form-group">
-          <label>Gemini API Key (opzionale, per lettura reale scrittura a mano)</label>
-          <input type="password" id="cfg-gemini-key" class="form-control" placeholder="AIzaSy...">
+          <label>Nome Supabase Edge Function</label>
+          <input type="text" id="cfg-edge-fn" class="form-control" placeholder="analyze-doc">
         </div>
 
         <hr class="divider">
 
         <div class="form-group">
-          <label>Password di Accesso all'Applicazione</label>
-          <input type="text" id="cfg-app-password" class="form-control" placeholder="admin2026">
+          <label>Nuova Password di Accesso (salvata su Database Supabase)</label>
+          <input type="text" id="cfg-app-password" class="form-control" placeholder="Inserisci nuova password...">
+          <small class="help-text">Modificando questo campo aggiornerai direttamente la password per tutti gli utenti.</small>
         </div>
       </div>
       <div class="modal-footer">
-        <button id="btn-save-settings" class="btn btn-primary">Salva e Riconnetti</button>
+        <button id="btn-reset-config-file" class="btn btn-outline btn-sm" title="Ripristina i valori scritti dentro config.js">Ripristina da config.js</button>
+        <button id="btn-save-settings" class="btn btn-primary">Salva e Aggiorna DB</button>
       </div>
     </div>
   </div>
 
+  <!-- 1. File separato di configurazione database -->
+  <script src="config.js"></script>
+  <!-- 2. Logica API e App -->
   <script src="api-service.js"></script>
   <script src="app.js"></script>
 </body>

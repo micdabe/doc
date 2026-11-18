@@ -1,37 +1,90 @@
 /**
- * API SERVICE LAYER (Database & Motore AI/OCR)
- * Quando porterai l'app sull'infrastruttura interna Tecnimont,
- * ti basterà modificare i metodi di questo oggetto senza toccare app.js.
+ * API SERVICE LAYER (Database, Password su DB & Supabase Edge Function AI/OCR)
+ * Legge i parametri esclusivamente da window.DOCSCANNER_CONFIG (definito in config.js).
  */
-
-const DEFAULT_CONFIG = {
-  supabaseUrl: '', // Puoi incollarlo qui o inserirlo dal pannello Impostazioni dell'app
-  supabaseKey: '', // Puoi incollarlo qui o inserirlo dal pannello Impostazioni dell'app
-  ocrMode: 'simulation', // 'simulation' | 'gemini'
-  geminiKey: '',
-  appPassword: 'admin2026'
-};
 
 const ApiService = {
   supabase: null,
-  config: { ...DEFAULT_CONFIG },
+  config: {},
 
   init() {
-    const saved = localStorage.getItem('docscanner_config');
-    if (saved) {
-      this.config = { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+    // Legge esclusivamente dal file config.js
+    this.config = { ...(window.DOCSCANNER_CONFIG || {}) };
+
+    // Eventuali override temporanei salvati dal pannello Impostazioni nel browser
+    const savedRaw = localStorage.getItem('docscanner_config');
+    if (savedRaw) {
+      try {
+        const saved = JSON.parse(savedRaw);
+        Object.keys(saved).forEach(k => {
+          if (saved[k] !== undefined && saved[k] !== '' && k !== 'appPassword') {
+            this.config[k] = saved[k];
+          }
+        });
+      } catch (e) {
+        console.warn('Errore parsing localStorage config:', e);
+      }
     }
+
     if (this.config.supabaseUrl && this.config.supabaseKey && window.supabase) {
       this.supabase = window.supabase.createClient(this.config.supabaseUrl, this.config.supabaseKey);
       return true;
     }
+    this.supabase = null;
     return false;
   },
 
   saveConfig(newConfig) {
-    this.config = { ...this.config, ...newConfig };
+    const { appPassword, ...connConfig } = newConfig;
+    this.config = { ...this.config, ...connConfig };
     localStorage.setItem('docscanner_config', JSON.stringify(this.config));
     return this.init();
+  },
+
+  resetToFileConfig() {
+    localStorage.removeItem('docscanner_config');
+    return this.init();
+  },
+
+  // =========================================================================
+  // 0. GESTIONE PASSWORD SUL DATABASE (Tabella: doc_app_settings)
+  // =========================================================================
+  async verifyAppPassword(inputPassword) {
+    if (this.supabase) {
+      try {
+        const { data, error } = await this.supabase
+          .from('doc_app_settings')
+          .select('value')
+          .eq('key', 'app_password')
+          .single();
+
+        if (!error && data && data.value) {
+          return inputPassword === data.value;
+        }
+        console.warn('Tabella doc_app_settings non trovata o vuota, uso fallback locale:', error);
+      } catch (err) {
+        console.warn('Errore lettura password da Supabase:', err);
+      }
+    }
+    const localPass = localStorage.getItem('docscanner_fallback_pass') || 'admin2026';
+    return inputPassword === localPass;
+  },
+
+  async updateAppPassword(newPassword) {
+    if (!newPassword) return false;
+    if (this.supabase) {
+      const { error } = await this.supabase
+        .from('doc_app_settings')
+        .upsert({
+          key: 'app_password',
+          value: newPassword,
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'key' });
+      if (error) throw error;
+      return true;
+    }
+    localStorage.setItem('docscanner_fallback_pass', newPassword);
+    return true;
   },
 
   // =========================================================================
@@ -47,7 +100,6 @@ const ApiService = {
       if (!error && data) return data;
       console.warn('Fallback locale per getContentTypes:', error);
     }
-    // Fallback locale se Supabase non è ancora configurato
     const local = localStorage.getItem('docscanner_fallback_types');
     if (local) return JSON.parse(local);
     const seed = [
@@ -61,7 +113,7 @@ const ApiService = {
 
   async saveContentType(typeObj) {
     if (this.supabase) {
-      if (typeObj.id) {
+      if (typeObj.id && !String(typeObj.id).startsWith('local-') && !String(typeObj.id).startsWith('type-')) {
         const { data, error } = await this.supabase
           .from('doc_content_types')
           .update({
@@ -94,7 +146,6 @@ const ApiService = {
         return data;
       }
     }
-    // Fallback locale
     const list = await this.getContentTypes();
     if (typeObj.id) {
       const idx = list.findIndex(t => t.id === typeObj.id);
@@ -108,7 +159,7 @@ const ApiService = {
   },
 
   async deleteContentType(id) {
-    if (this.supabase) {
+    if (this.supabase && !String(id).startsWith('local-') && !String(id).startsWith('type-')) {
       const { error } = await this.supabase
         .from('doc_content_types')
         .update({ is_active: false })
@@ -149,7 +200,7 @@ const ApiService = {
         page_number: p.page_number,
         detected_type_id: p.detected_type_id,
         detected_value: p.detected_value,
-        bounding_box: p.bounding_box,
+        bounding_box: { ...(p.bounding_box || {}), rotation: p.rotation || 0 },
         confidence: p.confidence,
         is_verified: p.is_verified,
         notes: p.notes || ''
@@ -171,22 +222,19 @@ const ApiService = {
   },
 
   // =========================================================================
-  // 3. MOTORE DI RICONOSCIMENTO MODULI SCRITTI A MANO (Vision AI / Simulazione)
+  // 3. MOTORE DI RICONOSCIMENTO MODULI SCRITTI A MANO (Supabase Edge Function)
   // =========================================================================
   async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null) {
-    // Se configurata la chiave Gemini e modalità 'gemini', chiama il modello Vision reale
-    if (this.config.ocrMode === 'gemini' && this.config.geminiKey) {
+    if ((this.config.ocrMode === 'edge_gemini' || this.config.ocrMode === 'gemini') && this.supabase) {
       try {
-        return await this._callGeminiVision(base64DataUrl, pageNumber, availableTypes, priorContext);
+        return await this._callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext);
       } catch (err) {
-        console.error('Errore chiamata Gemini Vision, passo a simulazione:', err);
+        console.error('Errore chiamata Edge Function Vision, passo a simulazione:', err);
       }
     }
 
-    // Modalità Simulazione Intelligente (per test immediato del flusso)
-    await new Promise(res => setTimeout(res, 350)); // Simula latenza rete
+    await new Promise(res => setTimeout(res, 300));
 
-    // Se abbiamo un priorContext (dalla Pagina 1 confermata dall'utente), 90% di probabilità che sia la stessa tipologia
     let chosenType = availableTypes[0];
     if (priorContext && priorContext.primaryTypeId) {
       const found = availableTypes.find(t => t.id === priorContext.primaryTypeId);
@@ -197,7 +245,6 @@ const ApiService = {
       ? { ...priorContext.referenceBox }
       : (chosenType?.expected_box || { x: 62, y: 72, w: 22, h: 7 });
 
-    // Genera un valore numerico realistico e una confidenza (qualche pagina con confidenza < 0.85 per far testare il filtro di revisione)
     const randomVal = Number((Math.random() * 85 + 15).toFixed(2));
     const isLowConf = pageNumber > 1 && pageNumber % 4 === 0;
     const confidence = isLowConf ? 0.76 : Number((0.91 + Math.random() * 0.08).toFixed(2));
@@ -210,58 +257,27 @@ const ApiService = {
     };
   },
 
-  async _callGeminiVision(base64DataUrl, pageNumber, availableTypes, priorContext) {
+  async _callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext) {
     const base64Clean = base64DataUrl.split(',')[1];
-    const typesDescription = availableTypes.map(t => ({
-      id: t.id,
-      code: t.code,
-      name: t.name,
-      target_field_label: t.target_field_label,
-      hints: t.ai_hints
-    }));
+    const fnName = this.config.edgeFunctionName || 'analyze-doc';
 
-    const priorHint = priorContext?.primaryTypeId
-      ? `NOTA PROBABILISTICA: La prima pagina di questo documento è stata confermata come tipologia ID "${priorContext.primaryTypeId}" e il valore numerico si trovava circa alle coordinate percentuali ${JSON.stringify(priorContext.referenceBox)}. È molto probabile che questa pagina (Pag. ${pageNumber}) appartenga alla stessa tipologia.`
-      : '';
-
-    const promptText = `
-Analizza l'immagine di questo certificato/modulo compilato a mano.
-1. Determina a quale tipologia appartiene scegliendo tra queste:
-${JSON.stringify(typesDescription)}
-${priorHint}
-2. Individua il valore numerico scritto a mano relativo al campo richiesto per quella tipologia.
-3. Restituisci SOLO un JSON valido con questo formato esatto (coordinate in percentuale 0-100 rispetto a larghezza e altezza pagina):
-{
-  "detected_type_id": "uuid-della-tipologia",
-  "detected_value": 123.45,
-  "bounding_box": {"x": 60, "y": 70, "w": 20, "h": 7},
-  "confidence": 0.95
-}`;
-
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${this.config.geminiKey}`;
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: promptText },
-            { inline_data: { mime_type: 'image/jpeg', data: base64Clean } }
-          ]
-        }],
-        generationConfig: { response_mime_type: 'application/json' }
-      })
+    const { data, error } = await this.supabase.functions.invoke(fnName, {
+      body: {
+        base64Clean,
+        pageNumber,
+        availableTypes,
+        priorContext
+      }
     });
 
-    const json = await response.json();
-    const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    const parsed = JSON.parse(rawText);
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
 
     return {
-      detected_type_id: parsed.detected_type_id || availableTypes[0]?.id,
-      detected_value: Number(parsed.detected_value) || 0,
-      bounding_box: parsed.bounding_box || { x: 60, y: 70, w: 20, h: 7 },
-      confidence: Number(parsed.confidence) || 0.90
+      detected_type_id: data.detected_type_id || availableTypes[0]?.id,
+      detected_value: Number(data.detected_value) || 0,
+      bounding_box: data.bounding_box || { x: 60, y: 70, w: 20, h: 7 },
+      confidence: Number(data.confidence) || 0.90
     };
   }
 };

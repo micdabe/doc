@@ -1,16 +1,16 @@
 /**
  * CONTROLLER PRINCIPALE DELL'APPLICAZIONE
- * Gestisce Login, Navigazione, Rendering PDF.js, Disegno Bounding Box e Calcolo Somme.
+ * Gestisce Login (verificato su DB Supabase), Navigazione, Rendering PDF.js con Rotazione,
+ * Disegno Bounding Box e Calcolo Somme.
  */
 
-// Configura il worker di PDF.js
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const AppState = {
   contentTypes: [],
   pdfDoc: null,
   currentBatch: null,
-  pagesData: [], // Array di oggetti: { page_number, detected_type_id, detected_value, bounding_box, confidence, is_verified, notes }
+  pagesData: [],
   currentReviewIndex: 0
 };
 
@@ -18,11 +18,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const isDbConnected = ApiService.init();
   updateDbStatusBadge(isDbConnected);
 
+  const loginHint = document.getElementById('login-db-hint');
+  if (loginHint) {
+    loginHint.textContent = isDbConnected
+      ? 'Connesso a Supabase — Password verificata su database'
+      : 'DB non configurato in config.js (password fallback: admin2026)';
+  }
+
   setupLogin();
   setupNavigation();
   setupSettingsModal();
   setupScannerWorkflow();
   setupBackoffice();
+
   setupBoundingBoxDrawing('cal-canvas-wrapper', 'cal-bbox', (newBox) => {
     if (AppState.pagesData[0]) {
       AppState.pagesData[0].bounding_box = newBox;
@@ -30,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
     }
   });
+
   setupBoundingBoxDrawing('rev-canvas-wrapper', 'rev-bbox', (newBox) => {
     const pageObj = AppState.pagesData[AppState.currentReviewIndex];
     if (pageObj) pageObj.bounding_box = newBox;
@@ -37,7 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================================================
-// 1. AUTENTICAZIONE CON PASSWORD
+// 1. AUTENTICAZIONE CON PASSWORD SUL DATABASE SUPABASE
 // ============================================================================
 function setupLogin() {
   const loginScreen = document.getElementById('login-screen');
@@ -45,6 +54,7 @@ function setupLogin() {
   const loginForm = document.getElementById('login-form');
   const passInput = document.getElementById('login-password');
   const errorMsg = document.getElementById('login-error');
+  const submitBtn = document.getElementById('btn-login-submit');
 
   if (sessionStorage.getItem('docscanner_auth') === 'true') {
     loginScreen.classList.add('hidden');
@@ -52,11 +62,19 @@ function setupLogin() {
     loadInitialData();
   }
 
-  loginForm.addEventListener('submit', (e) => {
+  loginForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (passInput.value === ApiService.config.appPassword) {
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Verifica su database...';
+    errorMsg.classList.add('hidden');
+
+    const isValid = await ApiService.verifyAppPassword(passInput.value);
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Accedi al Sistema';
+
+    if (isValid) {
       sessionStorage.setItem('docscanner_auth', 'true');
-      errorMsg.classList.add('hidden');
       loginScreen.classList.add('hidden');
       appContainer.classList.remove('hidden');
       loadInitialData();
@@ -81,10 +99,10 @@ async function loadInitialData() {
 function updateDbStatusBadge(connected) {
   const badge = document.getElementById('db-status-badge');
   if (connected) {
-    badge.textContent = 'Supabase: Connesso';
+    badge.textContent = 'Supabase + Edge AI: Connessi';
     badge.className = 'status-pill status-ok';
   } else {
-    badge.textContent = 'DB: Modalità Locale (Configura Supabase)';
+    badge.textContent = 'DB: Modalità Locale (Configura config.js)';
     badge.className = 'status-pill status-warn';
   }
 }
@@ -111,25 +129,48 @@ function setupNavigation() {
 
 function setupSettingsModal() {
   const modal = document.getElementById('settings-modal');
+  const fillModalFields = () => {
+    document.getElementById('cfg-supabase-url').value = ApiService.config.supabaseUrl || '';
+    document.getElementById('cfg-supabase-key').value = ApiService.config.supabaseKey || '';
+    document.getElementById('cfg-ocr-mode').value =
+      (ApiService.config.ocrMode === 'simulation') ? 'simulation' : 'edge_gemini';
+    document.getElementById('cfg-edge-fn').value = ApiService.config.edgeFunctionName || 'analyze-doc';
+    document.getElementById('cfg-app-password').value = '';
+  };
+
   document.getElementById('btn-open-settings').addEventListener('click', () => {
-    document.getElementById('cfg-supabase-url').value = ApiService.config.supabaseUrl;
-    document.getElementById('cfg-supabase-key').value = ApiService.config.supabaseKey;
-    document.getElementById('cfg-ocr-mode').value = ApiService.config.ocrMode;
-    document.getElementById('cfg-gemini-key').value = ApiService.config.geminiKey;
-    document.getElementById('cfg-app-password').value = ApiService.config.appPassword;
+    fillModalFields();
     modal.classList.remove('hidden');
   });
 
   document.getElementById('btn-close-settings').addEventListener('click', () => modal.classList.add('hidden'));
+
+  document.getElementById('btn-reset-config-file').addEventListener('click', async () => {
+    const connected = ApiService.resetToFileConfig();
+    fillModalFields();
+    updateDbStatusBadge(connected);
+    await loadInitialData();
+    alert('Ripristinati i parametri di connessione dal file config.js.');
+  });
 
   document.getElementById('btn-save-settings').addEventListener('click', async () => {
     const connected = ApiService.saveConfig({
       supabaseUrl: document.getElementById('cfg-supabase-url').value.trim(),
       supabaseKey: document.getElementById('cfg-supabase-key').value.trim(),
       ocrMode: document.getElementById('cfg-ocr-mode').value,
-      geminiKey: document.getElementById('cfg-gemini-key').value.trim(),
-      appPassword: document.getElementById('cfg-app-password').value.trim() || 'admin2026'
+      edgeFunctionName: document.getElementById('cfg-edge-fn').value.trim() || 'analyze-doc'
     });
+
+    const newPass = document.getElementById('cfg-app-password').value.trim();
+    if (newPass) {
+      try {
+        await ApiService.updateAppPassword(newPass);
+        alert('Password aggiornata con successo nel database!');
+      } catch (err) {
+        alert('Errore aggiornamento password sul database: ' + err.message);
+      }
+    }
+
     updateDbStatusBadge(connected);
     await loadInitialData();
     modal.classList.add('hidden');
@@ -137,7 +178,7 @@ function setupSettingsModal() {
 }
 
 // ============================================================================
-// 3. WORKFLOW SCANNER A 5 STEP
+// 3. WORKFLOW SCANNER A 5 STEP + ROTAZIONE PAGINE (-90°, 180°, +90°)
 // ============================================================================
 function setScannerStep(stepNumber) {
   const panels = ['step-upload', 'step-calibrate', 'step-processing', 'step-decision', 'step-review', 'step-output'];
@@ -175,7 +216,16 @@ function setupScannerWorkflow() {
     if (e.dataTransfer.files[0]) handlePdfFileSelected(e.dataTransfer.files[0]);
   });
 
-  // Cambio tipologia nel menu a discesa della Pagina 1
+  document.getElementById('btn-cal-rot-ccw').addEventListener('click', () => rotateCalibrationPage(-90));
+  document.getElementById('btn-cal-rot-180').addEventListener('click', () => rotateCalibrationPage(180));
+  document.getElementById('btn-cal-rot-cw').addEventListener('click', () => rotateCalibrationPage(90));
+  document.getElementById('btn-cal-reanalyze').addEventListener('click', reanalyzeCalibrationPage);
+
+  document.getElementById('btn-rev-rot-ccw').addEventListener('click', () => rotateReviewPage(-90));
+  document.getElementById('btn-rev-rot-180').addEventListener('click', () => rotateReviewPage(180));
+  document.getElementById('btn-rev-rot-cw').addEventListener('click', () => rotateReviewPage(90));
+  document.getElementById('btn-rev-reanalyze').addEventListener('click', reanalyzeReviewPage);
+
   document.getElementById('cal-type-select').addEventListener('change', (e) => {
     const selectedType = AppState.contentTypes.find(t => t.id === e.target.value);
     if (selectedType) {
@@ -188,14 +238,10 @@ function setupScannerWorkflow() {
     }
   });
 
-  // Pulsante: Annulla scansione
   document.getElementById('btn-cancel-scan').addEventListener('click', resetScanner);
   document.getElementById('btn-new-scan').addEventListener('click', resetScanner);
-
-  // Pulsante: Conferma Pagina 1 e avvia elaborazione totale (Step 2 -> Step 3 -> Step 4)
   document.getElementById('btn-confirm-page1').addEventListener('click', processRemainingPages);
 
-  // Pulsanti Decision Gate: SÌ vs NO
   document.getElementById('btn-decision-yes').addEventListener('click', async () => {
     await ApiService.updateBatch(AppState.currentBatch.id, {
       status: 'completed',
@@ -212,7 +258,6 @@ function setupScannerWorkflow() {
     loadReviewPage(0);
   });
 
-  // Controlli Step 5B (Revisione Pagina per Pagina)
   document.getElementById('btn-rev-prev').addEventListener('click', () => navigateReview(-1));
   document.getElementById('btn-rev-next').addEventListener('click', () => navigateReview(1));
 
@@ -233,7 +278,80 @@ function setupScannerWorkflow() {
   document.getElementById('btn-export-csv').addEventListener('click', exportReportCsv);
 }
 
-// --- CARICAMENTO PDF E ANALISI PAGINA 1 ---
+function normalizeAngle(angle) {
+  return ((angle % 360) + 360) % 360;
+}
+
+function formatRotationLabel(deg) {
+  if (deg === 0) return '0° (Normale)';
+  if (deg === 90) return '90° Orario';
+  if (deg === 180) return '180° Capovolta';
+  if (deg === 270) return '270° (90° Antiorario)';
+  return `${deg}°`;
+}
+
+async function rotateCalibrationPage(deltaDegrees) {
+  if (!AppState.pagesData[0]) return;
+  const currentRot = AppState.pagesData[0].rotation || 0;
+  const newRot = normalizeAngle(currentRot + deltaDegrees);
+  AppState.pagesData[0].rotation = newRot;
+
+  document.getElementById('cal-rot-badge').textContent = `${newRot}°`;
+  document.getElementById('cal-rot-meta').textContent = formatRotationLabel(newRot);
+
+  await renderPdfPageToCanvas(1, 'cal-pdf-canvas', newRot);
+}
+
+async function reanalyzeCalibrationPage() {
+  if (!AppState.pagesData[0]) return;
+  const rot = AppState.pagesData[0].rotation || 0;
+  const base64Img = await renderPdfPageToCanvas(1, 'cal-pdf-canvas', rot);
+  const analysis = await ApiService.analyzePageImage(base64Img, 1, AppState.contentTypes, null);
+
+  AppState.pagesData[0].detected_type_id = analysis.detected_type_id;
+  AppState.pagesData[0].detected_value = analysis.detected_value;
+  AppState.pagesData[0].bounding_box = analysis.bounding_box;
+  AppState.pagesData[0].confidence = analysis.confidence;
+
+  document.getElementById('cal-type-select').value = analysis.detected_type_id;
+  document.getElementById('cal-value-input').value = analysis.detected_value;
+  document.getElementById('cal-confidence').textContent = `${Math.round(analysis.confidence * 100)}%`;
+  applyBoundingBox('cal-bbox', analysis.bounding_box);
+}
+
+async function rotateReviewPage(deltaDegrees) {
+  const pageObj = AppState.pagesData[AppState.currentReviewIndex];
+  if (!pageObj) return;
+  const currentRot = pageObj.rotation || 0;
+  const newRot = normalizeAngle(currentRot + deltaDegrees);
+  pageObj.rotation = newRot;
+
+  document.getElementById('rev-rot-badge').textContent = `${newRot}°`;
+  document.getElementById('rev-rot-meta').textContent = formatRotationLabel(newRot);
+
+  await renderPdfPageToCanvas(pageObj.page_number, 'rev-pdf-canvas', newRot);
+}
+
+async function reanalyzeReviewPage() {
+  const pageObj = AppState.pagesData[AppState.currentReviewIndex];
+  if (!pageObj) return;
+  const rot = pageObj.rotation || 0;
+  const base64Img = await renderPdfPageToCanvas(pageObj.page_number, 'rev-pdf-canvas', rot);
+  const analysis = await ApiService.analyzePageImage(base64Img, pageObj.page_number, AppState.contentTypes, {
+    primaryTypeId: pageObj.detected_type_id,
+    referenceBox: pageObj.bounding_box
+  });
+
+  pageObj.detected_value = analysis.detected_value;
+  pageObj.bounding_box = analysis.bounding_box;
+  pageObj.confidence = analysis.confidence;
+
+  document.getElementById('rev-value-input').value = analysis.detected_value;
+  document.getElementById('rev-confidence').textContent = `${Math.round(analysis.confidence * 100)}%`;
+  applyBoundingBox('rev-bbox', analysis.bounding_box);
+  updateRunningSumDisplay();
+}
+
 async function handlePdfFileSelected(file) {
   if (AppState.contentTypes.length === 0) {
     alert('Configura almeno una Tipologia di Contenuto nel Backoffice prima di scansionare un PDF.');
@@ -248,12 +366,11 @@ async function handlePdfFileSelected(file) {
   AppState.pagesData = new Array(totalPages);
 
   document.getElementById('cal-total-pages').textContent = totalPages;
+  document.getElementById('cal-rot-badge').textContent = '0°';
+  document.getElementById('cal-rot-meta').textContent = formatRotationLabel(0);
   setScannerStep(2);
 
-  // Renderizza Pagina 1 sul canvas
-  const base64Page1 = await renderPdfPageToCanvas(1, 'cal-pdf-canvas');
-
-  // Chiama il motore di riconoscimento sulla Pagina 1
+  const base64Page1 = await renderPdfPageToCanvas(1, 'cal-pdf-canvas', 0);
   const analysis = await ApiService.analyzePageImage(base64Page1, 1, AppState.contentTypes, null);
 
   AppState.pagesData[0] = {
@@ -261,6 +378,7 @@ async function handlePdfFileSelected(file) {
     detected_type_id: analysis.detected_type_id,
     detected_value: analysis.detected_value,
     bounding_box: analysis.bounding_box,
+    rotation: 0,
     confidence: analysis.confidence,
     is_verified: false,
     notes: ''
@@ -281,18 +399,16 @@ async function handlePdfFileSelected(file) {
   applyBoundingBox('cal-bbox', analysis.bounding_box);
 }
 
-// --- ELABORAZIONE MASSIVA PAGINE 2..N ---
 async function processRemainingPages() {
-  // Salva le scelte confermate dall'utente sulla Pagina 1
   const confirmedTypeId = document.getElementById('cal-type-select').value;
   const confirmedValue = parseFloat(document.getElementById('cal-value-input').value) || 0;
   const confirmedBox = AppState.pagesData[0].bounding_box;
+  const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
   AppState.pagesData[0].detected_type_id = confirmedTypeId;
   AppState.pagesData[0].detected_value = confirmedValue;
   AppState.pagesData[0].is_verified = true;
 
-  // Aggiorna la posizione attesa del box per questa tipologia nel DB (auto-apprendimento spaziale)
   const typeObj = AppState.contentTypes.find(t => t.id === confirmedTypeId);
   if (typeObj) {
     typeObj.expected_box = confirmedBox;
@@ -309,8 +425,6 @@ async function processRemainingPages() {
   const total = AppState.pdfDoc.numPages;
   const progressBar = document.getElementById('proc-progress-bar');
   const statusText = document.getElementById('proc-status-text');
-
-  // Canvas invisibile per convertire le pagine successive in immagini
   const offscreenCanvas = document.createElement('canvas');
 
   for (let p = 2; p <= total; p++) {
@@ -318,7 +432,7 @@ async function processRemainingPages() {
     progressBar.style.width = `${pct}%`;
     statusText.textContent = `Lettura e riconoscimento scrittura a mano: Pagina ${p} di ${total}...`;
 
-    const base64Img = await renderPdfPageToElement(p, offscreenCanvas);
+    const base64Img = await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
     const res = await ApiService.analyzePageImage(base64Img, p, AppState.contentTypes, {
       primaryTypeId: confirmedTypeId,
       referenceBox: confirmedBox
@@ -329,6 +443,7 @@ async function processRemainingPages() {
       detected_type_id: res.detected_type_id,
       detected_value: res.detected_value,
       bounding_box: res.bounding_box,
+      rotation: inheritedRotation,
       confidence: res.confidence,
       is_verified: false,
       notes: ''
@@ -343,7 +458,6 @@ async function processRemainingPages() {
   setScannerStep(4);
 }
 
-// --- STEP 4: RIEPILOGO SOMME E DECISION GATE ---
 function renderDecisionSummary() {
   document.getElementById('dec-total-pages').textContent = AppState.pagesData.length;
   document.getElementById('dec-filename').textContent = AppState.currentBatch.filename;
@@ -373,17 +487,19 @@ function renderDecisionSummary() {
   }
 }
 
-// --- STEP 5B: REVISIONE PAGINA PER PAGINA ---
 async function loadReviewPage(index) {
   if (index < 0 || index >= AppState.pagesData.length) return;
   AppState.currentReviewIndex = index;
   const pageData = AppState.pagesData[index];
+  const rot = pageData.rotation || 0;
 
   document.getElementById('rev-curr-page').textContent = pageData.page_number;
   document.getElementById('rev-total-pages').textContent = AppState.pagesData.length;
   document.getElementById('rev-inspector-page').textContent = pageData.page_number;
+  document.getElementById('rev-rot-badge').textContent = `${rot}°`;
+  document.getElementById('rev-rot-meta').textContent = formatRotationLabel(rot);
 
-  await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas');
+  await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas', rot);
 
   const typeSelect = document.getElementById('rev-type-select');
   typeSelect.value = pageData.detected_type_id;
@@ -449,7 +565,6 @@ async function finishReviewAndShowOutput() {
   setScannerStep('5A');
 }
 
-// --- STEP 5A: OUTPUT FINALE ---
 function renderFinalOutput() {
   document.getElementById('out-filename').textContent = AppState.currentBatch.filename;
   document.getElementById('out-total-pages').textContent = AppState.pagesData.length;
@@ -478,6 +593,7 @@ function renderFinalOutput() {
     tr.innerHTML = `
       <td><strong>#${p.page_number}</strong></td>
       <td>${t ? `${t.code} — ${t.name}` : 'Non assegnato'}</td>
+      <td class="text-center"><code>${p.rotation || 0}°</code></td>
       <td class="text-right"><strong>${Number(p.detected_value).toFixed(2)} ${t?.unit || ''}</strong></td>
       <td class="text-center">
         <span class="status-pill ${p.is_verified ? 'status-ok' : 'status-warn'}">
@@ -506,10 +622,10 @@ function calculateTotalsByType() {
 }
 
 function exportReportCsv() {
-  let csv = 'Pagina;Codice Tipologia;Nome Tipologia;Valore;Unita;Verificato;Note\n';
+  let csv = 'Pagina;Codice Tipologia;Nome Tipologia;Rotazione Gradi;Valore;Unita;Verificato;Note\n';
   AppState.pagesData.forEach(p => {
     const t = AppState.contentTypes.find(ct => ct.id === p.detected_type_id);
-    csv += `${p.page_number};"${t?.code || ''}";"${t?.name || ''}";${Number(p.detected_value).toFixed(2)};"${t?.unit || ''}";${p.is_verified ? 'SI' : 'NO'};"${p.notes || ''}"\n`;
+    csv += `${p.page_number};"${t?.code || ''}";"${t?.name || ''}";${p.rotation || 0};${Number(p.detected_value).toFixed(2)};"${t?.unit || ''}";${p.is_verified ? 'SI' : 'NO'};"${p.notes || ''}"\n`;
   });
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -528,16 +644,19 @@ function resetScanner() {
 }
 
 // ============================================================================
-// 4. UTILITY PDF.JS & BOUNDING BOX INTERATTIVO
+// 4. UTILITY PDF.JS (CON SUPPORTO ROTAZIONE) & BOUNDING BOX INTERATTIVO
 // ============================================================================
-async function renderPdfPageToCanvas(pageNum, canvasId) {
+async function renderPdfPageToCanvas(pageNum, canvasId, extraRotation = 0) {
   const canvas = document.getElementById(canvasId);
-  return await renderPdfPageToElement(pageNum, canvas);
+  return await renderPdfPageToElement(pageNum, canvas, extraRotation);
 }
 
-async function renderPdfPageToElement(pageNum, canvasEl) {
+async function renderPdfPageToElement(pageNum, canvasEl, extraRotation = 0) {
   const page = await AppState.pdfDoc.getPage(pageNum);
-  const viewport = page.getViewport({ scale: 1.5 });
+  const nativeRotation = page.rotate || 0;
+  const totalRotation = normalizeAngle(nativeRotation + extraRotation);
+
+  const viewport = page.getViewport({ scale: 1.5, rotation: totalRotation });
   const ctx = canvasEl.getContext('2d');
   canvasEl.width = viewport.width;
   canvasEl.height = viewport.height;
