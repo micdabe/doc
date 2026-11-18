@@ -1,7 +1,6 @@
 /**
  * API SERVICE LAYER (Database, Password su DB & Supabase Edge Function AI/OCR)
  * Legge i parametri esclusivamente da window.DOCSCANNER_CONFIG (definito in config.js).
- * Include persistenza dell'apprendimento (coordinate + esempi corretti dall'utente).
  */
 
 const ApiService = {
@@ -160,10 +159,6 @@ const ApiService = {
     return typeObj;
   },
 
-  /**
-   * Registra una correzione umana (box + valore corretto) nella memoria storica della tipologia
-   * su Supabase in modo che le scansioni future migliorino progressivamente.
-   */
   async recordHumanCorrection(typeObj, correctionExample) {
     if (!typeObj) return;
     const history = Array.isArray(typeObj.learned_examples) ? [...typeObj.learned_examples] : [];
@@ -174,9 +169,8 @@ const ApiService = {
       note: correctionExample.note || '',
       timestamp: new Date().toISOString()
     });
-    // Mantiene gli ultimi 15 esempi validati per ciascuna tipologia
     typeObj.learned_examples = history.slice(-15);
-    typeObj.expected_box = correctionExample.box;
+    typeObj.expected_box = { ...correctionExample.box };
 
     try {
       await this.saveContentType(typeObj);
@@ -251,18 +245,14 @@ const ApiService = {
   // =========================================================================
   // 3. MOTORE DI RICONOSCIMENTO ADATTIVO (Edge Function + Ritaglio Mirato)
   // =========================================================================
-  async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null) {
+  async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
     if ((this.config.ocrMode === 'edge_gemini' || this.config.ocrMode === 'gemini') && this.supabase) {
-      try {
-        return await this._callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url);
-      } catch (err) {
-        console.error('Errore chiamata Edge Function Vision, passo a simulazione:', err);
-      }
+      // Non nascondiamo più gli errori: restituiamo eventuale errorMsg così l'utente vede subito cosa non va nella Edge Function!
+      return await this._callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url, searchWindowMeta);
     }
 
-    // Simulazione adattiva (usa subito targetBox se l'utente ha spostato il riquadro)
+    // Modalità Simulazione esplicita
     await new Promise(res => setTimeout(res, 250));
-
     let chosenType = availableTypes[0];
     if (priorContext && priorContext.primaryTypeId) {
       const found = availableTypes.find(t => t.id === priorContext.primaryTypeId);
@@ -276,41 +266,60 @@ const ApiService = {
         : (chosenType?.expected_box || { x: 62, y: 72, w: 22, h: 7 }));
 
     const randomVal = Number((Math.random() * 85 + 15).toFixed(2));
-    const isLowConf = !targetBox && pageNumber > 1 && pageNumber % 4 === 0;
-    const confidence = targetBox ? 0.96 : (isLowConf ? 0.76 : Number((0.91 + Math.random() * 0.08).toFixed(2)));
-
     return {
       detected_type_id: chosenType ? chosenType.id : null,
       detected_value: randomVal,
+      raw_text_read: String(randomVal),
       bounding_box: activeBox,
-      confidence: confidence
+      confidence: 0.90,
+      errorMsg: null
     };
   },
 
-  async _callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url) {
+  async _callSupabaseEdgeVision(base64DataUrl, pageNumber, availableTypes, priorContext, targetBox, croppedBase64Url, searchWindowMeta) {
     const base64Clean = base64DataUrl.split(',')[1];
     const croppedBase64Clean = croppedBase64Url ? croppedBase64Url.split(',')[1] : null;
     const fnName = this.config.edgeFunctionName || 'analyze-doc';
 
-    const { data, error } = await this.supabase.functions.invoke(fnName, {
-      body: {
-        base64Clean,
-        croppedBase64Clean,
-        pageNumber,
-        availableTypes,
-        priorContext,
-        targetBox
+    try {
+      const { data, error } = await this.supabase.functions.invoke(fnName, {
+        body: {
+          base64Clean,
+          croppedBase64Clean,
+          searchWindowMeta,
+          pageNumber,
+          availableTypes,
+          priorContext,
+          targetBox
+        }
+      });
+
+      if (error) {
+        throw new Error(error.message || 'Errore invocazione Edge Function');
       }
-    });
+      if (data?.error) {
+        throw new Error(data.error);
+      }
 
-    if (error) throw error;
-    if (data?.error) throw new Error(data.error);
-
-    return {
-      detected_type_id: data.detected_type_id || availableTypes[0]?.id,
-      detected_value: Number(data.detected_value) || 0,
-      bounding_box: targetBox || data.bounding_box || { x: 60, y: 70, w: 20, h: 7 },
-      confidence: Number(data.confidence) || 0.90
-    };
+      return {
+        detected_type_id: data.detected_type_id || priorContext?.primaryTypeId || availableTypes[0]?.id,
+        detected_value: Number(data.detected_value) || 0,
+        raw_text_read: data.raw_text_read || '',
+        bounding_box: targetBox || data.bounding_box || priorContext?.referenceBox || { x: 60, y: 70, w: 20, h: 7 },
+        confidence: Number(data.confidence) || 0.90,
+        errorMsg: null
+      };
+    } catch (err) {
+      console.error('Errore Edge Function Vision:', err);
+      const fallbackBox = targetBox || priorContext?.referenceBox || availableTypes[0]?.expected_box || { x: 60, y: 70, w: 20, h: 7 };
+      return {
+        detected_type_id: priorContext?.primaryTypeId || availableTypes[0]?.id,
+        detected_value: 0,
+        raw_text_read: 'ERRORE OCR',
+        bounding_box: fallbackBox,
+        confidence: 0,
+        errorMsg: err.message || 'Errore sconosciuto nella Edge Function'
+      };
+    }
   }
 };
