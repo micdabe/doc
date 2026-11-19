@@ -1,11 +1,12 @@
 /**
- * API SERVICE LAYER (100% REALE — VELOCE & PARALLELO)
- * Legge esclusivamente da window.DOCSCANNER_CONFIG (config.js).
+ * API SERVICE LAYER (SUPABASE DB + TESSERACT.JS IN LOCALE NEL BROWSER)
+ * 100% statico, zero costi per chiamata, zero limiti di quota.
  */
 
 const ApiService = {
   supabase: null,
   config: {},
+  _worker: null,
 
   init() {
     const savedRaw = localStorage.getItem('docscanner_config');
@@ -13,9 +14,6 @@ const ApiService = {
     if (savedRaw) {
       try {
         saved = JSON.parse(savedRaw);
-        delete saved.ocrMode;
-        delete saved.geminiKey;
-        delete saved.appPassword;
       } catch (e) {
         saved = {};
       }
@@ -25,8 +23,7 @@ const ApiService = {
 
     this.config = {
       supabaseUrl: (fileConfig.supabaseUrl && fileConfig.supabaseUrl.trim()) || saved.supabaseUrl || '',
-      supabaseKey: (fileConfig.supabaseKey && fileConfig.supabaseKey.trim()) || saved.supabaseKey || '',
-      edgeFunctionName: (fileConfig.edgeFunctionName && fileConfig.edgeFunctionName.trim()) || saved.edgeFunctionName || 'analyze-doc'
+      supabaseKey: (fileConfig.supabaseKey && fileConfig.supabaseKey.trim()) || saved.supabaseKey || ''
     };
 
     if (this.config.supabaseUrl && this.config.supabaseKey && window.supabase) {
@@ -40,8 +37,7 @@ const ApiService = {
   saveConfig(newConfig) {
     const cleanConfig = {
       supabaseUrl: (newConfig.supabaseUrl || '').trim(),
-      supabaseKey: (newConfig.supabaseKey || '').trim(),
-      edgeFunctionName: (newConfig.edgeFunctionName || 'analyze-doc').trim()
+      supabaseKey: (newConfig.supabaseKey || '').trim()
     };
     localStorage.setItem('docscanner_config', JSON.stringify(cleanConfig));
     return this.init();
@@ -52,6 +48,45 @@ const ApiService = {
     return this.init();
   },
 
+  async _getTesseractWorker() {
+    if (!this._worker && window.Tesseract) {
+      this._worker = await window.Tesseract.createWorker('eng');
+      await this._worker.setParameters({
+        tessedit_char_whitelist: '0123456789.,-€$m³Kgkh/ '
+      });
+    }
+    return this._worker;
+  },
+
+  _parseNumericValue(rawText) {
+    if (!rawText) return 0;
+    const matches = String(rawText).match(/[-+]?\d[\d.,\s]*\d|\d+/g);
+    if (!matches || matches.length === 0) return 0;
+
+    const best = matches.reduce((a, b) =>
+      a.replace(/\D/g, '').length >= b.replace(/\D/g, '').length ? a : b
+    );
+
+    let cleaned = best.replace(/\s+/g, '');
+    if (cleaned.includes('.') && cleaned.includes(',')) {
+      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+    } else if (/^\d{1,3}(\.\d{3})+$/.test(cleaned)) {
+      cleaned = cleaned.replace(/\./g, '');
+    } else if (cleaned.includes(',')) {
+      if (/^\d{1,3}(,\d{3})+$/.test(cleaned)) {
+        cleaned = cleaned.replace(/,/g, '');
+      } else {
+        cleaned = cleaned.replace(',', '.');
+      }
+    }
+
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? 0 : num;
+  },
+
+  // =========================================================================
+  // 0. GESTIONE PASSWORD SUL DATABASE (Tabella: doc_app_settings)
+  // =========================================================================
   async verifyAppPassword(inputPassword) {
     if (!this.supabase) {
       throw new Error('Database Supabase non configurato in config.js.');
@@ -83,6 +118,9 @@ const ApiService = {
     return true;
   },
 
+  // =========================================================================
+  // 1. GESTIONE TIPOLOGIE (Tabella: doc_content_types)
+  // =========================================================================
   async getContentTypes() {
     if (!this.supabase) return [];
     const { data, error } = await this.supabase
@@ -152,7 +190,7 @@ const ApiService = {
     try {
       await this.saveContentType(typeObj);
     } catch (err) {
-      console.warn('Errore salvataggio memoria apprendimento su DB:', err);
+      console.warn('Errore salvataggio coordinate su DB:', err);
     }
   },
 
@@ -166,6 +204,9 @@ const ApiService = {
     return true;
   },
 
+  // =========================================================================
+  // 2. GESTIONE SESSIONI E PAGINE (Tabelle: doc_batches, doc_pages)
+  // =========================================================================
   async createBatch(filename, totalPages) {
     if (!this.supabase) throw new Error('Database Supabase non connesso.');
     const { data, error } = await this.supabase
@@ -208,69 +249,54 @@ const ApiService = {
     return data || [];
   },
 
+  // =========================================================================
+  // 3. MOTORE OCR LOCALE IN TESSERACT.JS (ZERO CHIAMATE API / ZERO LIMITI)
+  // =========================================================================
   async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
-    if (!this.supabase) {
-      throw new Error('Client Supabase non inizializzato. Verifica config.js.');
-    }
-
-    const base64Clean = base64DataUrl ? base64DataUrl.split(',')[1] : null;
-    const croppedBase64Clean = croppedBase64Url ? croppedBase64Url.split(',')[1] : null;
-    const fnName = this.config.edgeFunctionName || 'analyze-doc';
-
-    const invokeWithTimeout = () => {
-      return Promise.race([
-        this.supabase.functions.invoke(fnName, {
-          body: {
-            base64Clean,
-            croppedBase64Clean,
-            searchWindowMeta,
-            pageNumber,
-            availableTypes,
-            priorContext,
-            targetBox
-          }
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout 16s sulla pagina ${pageNumber}`)), 16000)
-        )
-      ]);
-    };
+    const defaultTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
+    const refBox = targetBox
+      || (priorContext && priorContext.referenceBox)
+      || (availableTypes && availableTypes.find(t => t.id === defaultTypeId)?.expected_box)
+      || { x: 55, y: 65, w: 25, h: 8 };
 
     try {
-      let result;
-      try {
-        result = await invokeWithTimeout();
-      } catch (firstErr) {
-        await new Promise(r => setTimeout(r, 600));
-        result = await invokeWithTimeout();
+      const worker = await this._getTesseractWorker();
+      const imageToRead = croppedBase64Url || base64DataUrl;
+      if (!imageToRead) {
+        throw new Error('Nessuna immagine disponibile per la lettura OCR.');
       }
 
-      const { data, error } = result;
-      if (error) {
-        throw new Error(error.message || `Errore invocazione Edge Function '${fnName}'`);
-      }
-      if (data?.error) {
-        throw new Error(data.error);
+      const ret = await worker.recognize(imageToRead);
+      const rawText = (ret?.data?.text || '').trim();
+      const confScore = typeof ret?.data?.confidence === 'number'
+        ? Math.max(0, Math.min(1, ret.data.confidence / 100))
+        : 0.75;
+
+      const parsedVal = this._parseNumericValue(rawText);
+
+      // Se l'utente ha spostato/disegnato un riquadro, cerca in una piccola finestra attorno ad esso nelle pagine successive
+      let nextBox = { ...refBox };
+      if (!targetBox && priorContext?.referenceBox) {
+        nextBox = { ...priorContext.referenceBox };
       }
 
       return {
-        detected_type_id: data.detected_type_id || priorContext?.primaryTypeId || availableTypes[0]?.id,
-        detected_value: Number(data.detected_value) || 0,
-        raw_text_read: data.raw_text_read || '',
-        bounding_box: targetBox || data.bounding_box || priorContext?.referenceBox || { x: 60, y: 70, w: 20, h: 7 },
-        confidence: Number(data.confidence) || 0.90,
+        detected_type_id: defaultTypeId,
+        detected_value: parsedVal,
+        raw_text_read: rawText || '(vuoto)',
+        bounding_box: nextBox,
+        confidence: Number(confScore.toFixed(2)),
         errorMsg: null
       };
     } catch (err) {
-      console.error(`Errore OCR Pagina ${pageNumber}:`, err);
-      const fallbackBox = targetBox || priorContext?.referenceBox || availableTypes[0]?.expected_box || { x: 60, y: 70, w: 20, h: 7 };
+      console.error('Errore Tesseract.js:', err);
       return {
-        detected_type_id: priorContext?.primaryTypeId || availableTypes[0]?.id,
+        detected_type_id: defaultTypeId,
         detected_value: 0,
-        raw_text_read: 'ERRORE / TIMEOUT',
-        bounding_box: fallbackBox,
+        raw_text_read: 'ERRORE OCR',
+        bounding_box: { ...refBox },
         confidence: 0,
-        errorMsg: err.message || 'Errore sconosciuto nella Edge Function'
+        errorMsg: err.message || 'Errore durante la lettura OCR locale'
       };
     }
   }

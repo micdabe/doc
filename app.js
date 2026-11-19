@@ -1,8 +1,8 @@
 /**
- * CONTROLLER PRINCIPALE DELL'APPLICAZIONE (v11 — DOPPIA PASSATA PAGINA 1 + PARALLELISMO 4x)
- * - Pagina 1: Passaggio 1 trova l'area del numero; Passaggio 2 esegue subito uno zoom ad alta
- *   risoluzione su quell'area per leggere il valore numerico già al primo caricamento!
- * - Pagine 2..N: Elaborazione parallela a 4 worker simultanei (30 pagine in ~8-10 secondi).
+ * CONTROLLER PRINCIPALE (VERSIONE STATICA CON TESSERACT.JS)
+ * - Rilancio OCR locale immediato ogni volta che disegni/sposti il rettangolo col mouse
+ * - Rotazione pagina (-90°, 180°, +90°)
+ * - Ricerca sulle pagine successive centrata sull'area calibrata dall'utente
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -25,8 +25,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginHint = document.getElementById('login-db-hint');
   if (loginHint) {
     loginHint.textContent = isDbConnected
-      ? 'Connesso a Supabase — Password verificata su database'
-      : 'ERRORE: Configura supabaseUrl e supabaseKey dentro config.js';
+      ? 'Connesso a Supabase — OCR locale Tesseract.js (senza limiti)'
+      : 'Configura supabaseUrl e supabaseKey dentro config.js';
   }
 
   setupLogin();
@@ -70,9 +70,6 @@ document.addEventListener('DOMContentLoaded', () => {
   );
 });
 
-// ============================================================================
-// 1. AUTENTICAZIONE CON PASSWORD SUL DATABASE SUPABASE
-// ============================================================================
 function setupLogin() {
   const loginScreen = document.getElementById('login-screen');
   const appContainer = document.getElementById('app-container');
@@ -129,7 +126,7 @@ async function loadInitialData() {
 function updateDbStatusBadge(connected) {
   const badge = document.getElementById('db-status-badge');
   if (connected) {
-    badge.textContent = 'Supabase + Edge AI: Connessi';
+    badge.textContent = 'Supabase + OCR Locale: Pronti';
     badge.className = 'status-pill status-ok';
   } else {
     badge.textContent = 'DB: Non Configurato in config.js';
@@ -137,9 +134,6 @@ function updateDbStatusBadge(connected) {
   }
 }
 
-// ============================================================================
-// 2. NAVIGAZIONE TAB & MODALE IMPOSTAZIONI
-// ============================================================================
 function setupNavigation() {
   const navBtns = document.querySelectorAll('.nav-btn');
   navBtns.forEach(btn => {
@@ -163,7 +157,6 @@ function setupSettingsModal() {
   const fillModalFields = () => {
     document.getElementById('cfg-supabase-url').value = ApiService.config.supabaseUrl || '';
     document.getElementById('cfg-supabase-key').value = ApiService.config.supabaseKey || '';
-    document.getElementById('cfg-edge-fn').value = ApiService.config.edgeFunctionName || 'analyze-doc';
     document.getElementById('cfg-app-password').value = '';
   };
 
@@ -185,8 +178,7 @@ function setupSettingsModal() {
   document.getElementById('btn-save-settings').addEventListener('click', async () => {
     const connected = ApiService.saveConfig({
       supabaseUrl: document.getElementById('cfg-supabase-url').value.trim(),
-      supabaseKey: document.getElementById('cfg-supabase-key').value.trim(),
-      edgeFunctionName: document.getElementById('cfg-edge-fn').value.trim() || 'analyze-doc'
+      supabaseKey: document.getElementById('cfg-supabase-key').value.trim()
     });
 
     const newPass = document.getElementById('cfg-app-password').value.trim();
@@ -205,9 +197,6 @@ function setupSettingsModal() {
   });
 }
 
-// ============================================================================
-// 3. WORKFLOW SCANNER + DOPPIA PASSATA PAGINA 1 + PARALLELISMO 4x
-// ============================================================================
 function setScannerStep(stepNumber) {
   const panels = ['step-upload', 'step-calibrate', 'step-processing', 'step-decision', 'step-review', 'step-output'];
   panels.forEach(id => document.getElementById(id).classList.add('hidden'));
@@ -232,7 +221,7 @@ function showOcrErrorBanner(containerId, errorMsg) {
   const banner = document.getElementById(containerId);
   if (!banner) return;
   if (errorMsg) {
-    banner.textContent = `⚠️ Errore Edge Function OCR: ${errorMsg}`;
+    banner.textContent = `⚠️ Errore OCR: ${errorMsg}`;
     banner.classList.remove('hidden');
   } else {
     banner.classList.add('hidden');
@@ -332,23 +321,18 @@ function setupScannerWorkflow() {
 async function runTargetedOcrOnCalibrationBox(box) {
   if (!AppState.pagesData[0] || !box) return;
   const liveBadge = document.getElementById('cal-ocr-live-badge');
-  liveBadge.textContent = 'Lettura zoom ad alta risoluzione...';
+  liveBadge.textContent = 'Lettura OCR riquadro...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
-  const fullBase64 = canvasToOptimizedDataUrl(fullCanvas, 900, 0.78, false);
   const croppedBase64 = extractCroppedImageWithPadding(fullCanvas, box, 5, 'cal-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
   const res = await ApiService.analyzePageImage(
-    fullBase64,
+    null,
     1,
     AppState.contentTypes,
-    {
-      primaryTypeId: selectedTypeId,
-      referenceBox: box,
-      sessionCorrections: AppState.sessionCorrections
-    },
+    { primaryTypeId: selectedTypeId, referenceBox: box },
     box,
     croppedBase64
   );
@@ -366,7 +350,7 @@ async function runTargetedOcrOnCalibrationBox(box) {
   document.getElementById('cal-confidence').textContent = `${Math.round(res.confidence * 100)}% (Testo letto: "${res.raw_text_read || 'nessuno'}")`;
   document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${res.detected_value}`;
 
-  liveBadge.textContent = res.errorMsg ? '⚠ Errore OCR' : '✓ Letto';
+  liveBadge.textContent = '✓ Letto';
   setTimeout(() => liveBadge.classList.add('hidden'), 1500);
 }
 
@@ -375,23 +359,18 @@ async function runTargetedOcrOnReviewBox(box) {
   if (!pageObj || !box) return;
 
   const liveBadge = document.getElementById('rev-ocr-live-badge');
-  liveBadge.textContent = 'Lettura zoom...';
+  liveBadge.textContent = 'Lettura OCR riquadro...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
-  const fullBase64 = canvasToOptimizedDataUrl(fullCanvas, 900, 0.78, false);
   const croppedBase64 = extractCroppedImageWithPadding(fullCanvas, box, 5, 'rev-crop-canvas');
 
   const selectedTypeId = document.getElementById('rev-type-select').value;
   const res = await ApiService.analyzePageImage(
-    fullBase64,
+    null,
     pageObj.page_number,
     AppState.contentTypes,
-    {
-      primaryTypeId: selectedTypeId,
-      referenceBox: box,
-      sessionCorrections: AppState.sessionCorrections
-    },
+    { primaryTypeId: selectedTypeId, referenceBox: box },
     box,
     croppedBase64
   );
@@ -411,7 +390,7 @@ async function runTargetedOcrOnReviewBox(box) {
   document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${res.detected_value}`;
   updateRunningSumDisplay();
 
-  liveBadge.textContent = res.errorMsg ? '⚠ Errore OCR' : '✓ Letto';
+  liveBadge.textContent = '✓ Letto';
   setTimeout(() => liveBadge.classList.add('hidden'), 1500);
 }
 
@@ -430,11 +409,7 @@ function formatRotationLabel(deg) {
 async function rotateCalibrationPage(deltaDegrees) {
   if (!AppState.pdfDoc) return;
   if (!AppState.pagesData[0]) {
-    AppState.pagesData[0] = {
-      page_number: 1,
-      rotation: 0,
-      bounding_box: { x: 60, y: 70, w: 20, h: 7 }
-    };
+    AppState.pagesData[0] = { page_number: 1, rotation: 0, bounding_box: { x: 60, y: 70, w: 20, h: 7 } };
   }
   const newRot = normalizeAngle((AppState.pagesData[0].rotation || 0) + deltaDegrees);
   AppState.pagesData[0].rotation = newRot;
@@ -461,7 +436,6 @@ async function rotateReviewPage(deltaDegrees) {
   await runTargetedOcrOnReviewBox(pageObj.bounding_box);
 }
 
-// --- CARICAMENTO PDF E DOPPIA PASSATA AUTOMATICA SU PAGINA 1 ---
 async function handlePdfFileSelected(file) {
   if (AppState.contentTypes.length === 0) {
     alert('Configura almeno una Tipologia di Contenuto nel Backoffice prima di scansionare un PDF.');
@@ -504,66 +478,38 @@ async function handlePdfFileSelected(file) {
 
   setScannerStep(2);
 
-  // Renderizza Pagina 1 ad altissima nitidezza (scale 2.2) per estrarre zoom cristallini
-  const base64Page1 = await renderPdfPageToCanvas(1, 'cal-pdf-canvas', 0);
-  extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), initialBox, 5, 'cal-crop-canvas');
+  await renderPdfPageToCanvas(1, 'cal-pdf-canvas', 0);
+  const croppedBase64 = extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), initialBox, 5, 'cal-crop-canvas');
 
   const liveBadge = document.getElementById('cal-ocr-live-badge');
-  liveBadge.textContent = 'Passaggio 1/2: Individuazione area...';
+  liveBadge.textContent = 'OCR locale in corso...';
   liveBadge.classList.remove('hidden');
 
-  // PASSAGGIO 1: Trova tipologia e area sul foglio intero
-  const analysis = await ApiService.analyzePageImage(base64Page1, 1, AppState.contentTypes, null);
-  showOcrErrorBanner('cal-ocr-error-banner', analysis.errorMsg);
-
-  const detectedBox = analysis.bounding_box || initialBox;
-  const detectedTypeId = analysis.detected_type_id || defaultType?.id;
-
-  AppState.pagesData[0].detected_type_id = detectedTypeId;
-  AppState.pagesData[0].bounding_box = { ...detectedBox };
-  AppState.latestCalibratedTypeId = detectedTypeId;
-  AppState.latestCalibratedBox = { ...detectedBox };
-
-  document.getElementById('cal-type-select').value = detectedTypeId;
-  applyBoundingBox('cal-bbox', detectedBox);
-  document.getElementById('cal-coords-display').textContent =
-    `X:${detectedBox.x}% Y:${detectedBox.y}% W:${detectedBox.w}% H:${detectedBox.h}%`;
-
-  const matchedType = AppState.contentTypes.find(t => t.id === detectedTypeId);
-  updateLearnedBadge('cal-learned-count-badge', matchedType);
-  document.getElementById('cal-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
-
-  // PASSAGGIO 2 AUTOMATICO: Ritaglia ad alta risoluzione l'area appena trovata e legge il valore!
-  if (!analysis.errorMsg) {
-    liveBadge.textContent = 'Passaggio 2/2: Lettura zoom valore...';
-    const croppedZoomBase64 = extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), detectedBox, 5, 'cal-crop-canvas');
-    const zoomRes = await ApiService.analyzePageImage(
-      base64Page1,
-      1,
-      AppState.contentTypes,
-      { primaryTypeId: detectedTypeId, referenceBox: detectedBox },
-      detectedBox,
-      croppedZoomBase64
-    );
-
-    const bestVal = zoomRes.detected_value !== 0 ? zoomRes.detected_value : analysis.detected_value;
-    const bestRaw = zoomRes.detected_value !== 0 ? zoomRes.raw_text_read : analysis.raw_text_read;
-    const bestConf = Math.max(zoomRes.confidence || 0, analysis.confidence || 0);
-
-    AppState.pagesData[0].ai_initial_value = bestVal;
-    AppState.pagesData[0].detected_value = bestVal;
-    AppState.pagesData[0].raw_text_read = bestRaw;
-    AppState.pagesData[0].confidence = bestConf;
-
-    document.getElementById('cal-value-input').value = bestVal !== 0 ? bestVal : '';
-    document.getElementById('cal-confidence').textContent = `${Math.round(bestConf * 100)}% (Testo letto: "${bestRaw || 'nessuno'}")`;
-    document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${bestVal}`;
-  }
+  const analysis = await ApiService.analyzePageImage(
+    null,
+    1,
+    AppState.contentTypes,
+    { primaryTypeId: defaultType?.id, referenceBox: initialBox },
+    initialBox,
+    croppedBase64
+  );
 
   liveBadge.classList.add('hidden');
+  showOcrErrorBanner('cal-ocr-error-banner', analysis.errorMsg);
+
+  AppState.pagesData[0].ai_initial_value = analysis.detected_value;
+  AppState.pagesData[0].detected_value = analysis.detected_value;
+  AppState.pagesData[0].raw_text_read = analysis.raw_text_read;
+  AppState.pagesData[0].confidence = analysis.confidence;
+
+  const matchedType = AppState.contentTypes.find(t => t.id === AppState.pagesData[0].detected_type_id);
+  updateLearnedBadge('cal-learned-count-badge', matchedType);
+  document.getElementById('cal-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
+  document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${analysis.detected_value}`;
+  document.getElementById('cal-value-input').value = analysis.detected_value !== 0 ? analysis.detected_value : '';
+  document.getElementById('cal-confidence').textContent = `${Math.round(analysis.confidence * 100)}% (Testo letto: "${analysis.raw_text_read || 'nessuno'}")`;
 }
 
-// --- ELABORAZIONE PARALLELA (4 PAGINE ALLA VOLTA) PER VELOCITÀ MASSIMA ---
 async function processRemainingPages() {
   const confirmedTypeId = document.getElementById('cal-type-select').value;
   const confirmedValue = parseFloat(document.getElementById('cal-value-input').value) || 0;
@@ -582,7 +528,7 @@ async function processRemainingPages() {
     ai_initial_value: AppState.pagesData[0].ai_initial_value,
     confirmed_value: confirmedValue,
     box: confirmedBox,
-    note: 'Calibrazione manuale Pagina 1'
+    note: 'Calibrazione Pagina 1'
   };
   AppState.sessionCorrections.push(correctionRecord);
 
@@ -601,69 +547,41 @@ async function processRemainingPages() {
   const total = AppState.pdfDoc.numPages;
   const progressBar = document.getElementById('proc-progress-bar');
   const statusText = document.getElementById('proc-status-text');
+  const offscreenCanvas = document.createElement('canvas');
 
-  if (total <= 1) {
-    progressBar.style.width = '100%';
-    renderDecisionSummary();
-    setScannerStep(4);
-    return;
+  for (let p = 2; p <= total; p++) {
+    const pct = Math.round(((p - 1) / total) * 100);
+    progressBar.style.width = `${pct}%`;
+    statusText.textContent = `OCR locale Pagina ${p} di ${total} nell'area calibrata (X:${confirmedBox.x}%, Y:${confirmedBox.y}%)...`;
+
+    await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
+    const cropBase64 = extractCroppedImageWithPadding(offscreenCanvas, confirmedBox, 6, null);
+
+    const res = await ApiService.analyzePageImage(
+      null,
+      p,
+      AppState.contentTypes,
+      { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox },
+      confirmedBox,
+      cropBase64
+    );
+
+    AppState.pagesData[p - 1] = {
+      page_number: p,
+      detected_type_id: res.detected_type_id,
+      ai_initial_value: res.detected_value,
+      detected_value: res.detected_value,
+      raw_text_read: res.raw_text_read,
+      bounding_box: { ...confirmedBox },
+      rotation: inheritedRotation,
+      confidence: res.confidence,
+      is_verified: false,
+      notes: ''
+    };
   }
 
-  let completedCount = 1; // Pagina 1 già fatta
-  const pageQueue = [];
-  for (let p = 2; p <= total; p++) pageQueue.push(p);
-
-  const searchWindowMeta = expandBoxWithMargin(confirmedBox, 12);
-
-  // Worker pool parallelo: elabora 4 pagine contemporaneamente!
-  const CONCURRENCY = 4;
-  const worker = async () => {
-    const localCanvas = document.createElement('canvas');
-    while (pageQueue.length > 0) {
-      const p = pageQueue.shift();
-      if (!p) break;
-
-      const base64Img = await renderPdfPageToElement(p, localCanvas, inheritedRotation);
-      const searchCropBase64 = extractCroppedImageWithPadding(localCanvas, confirmedBox, 12, null);
-
-      const res = await ApiService.analyzePageImage(
-        base64Img,
-        p,
-        AppState.contentTypes,
-        {
-          primaryTypeId: confirmedTypeId,
-          referenceBox: confirmedBox,
-          sessionCorrections: AppState.sessionCorrections
-        },
-        null,
-        searchCropBase64,
-        searchWindowMeta
-      );
-
-      AppState.pagesData[p - 1] = {
-        page_number: p,
-        detected_type_id: res.detected_type_id,
-        ai_initial_value: res.detected_value,
-        detected_value: res.detected_value,
-        raw_text_read: res.raw_text_read,
-        bounding_box: res.bounding_box,
-        rotation: inheritedRotation,
-        confidence: res.confidence,
-        is_verified: false,
-        notes: res.errorMsg ? `Errore OCR: ${res.errorMsg}` : ''
-      };
-
-      completedCount++;
-      const pct = Math.round((completedCount / total) * 100);
-      progressBar.style.width = `${pct}%`;
-      statusText.textContent = `Elaborate ${completedCount} di ${total} pagine (4 flussi paralleli attivi)...`;
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pageQueue.length) }, () => worker()));
-
   progressBar.style.width = '100%';
-  statusText.textContent = 'Salvataggio risultati sul database...';
+  statusText.textContent = 'Salvataggio risultati su database...';
   await ApiService.savePagesBulk(AppState.currentBatch.id, AppState.pagesData);
   await ApiService.updateBatch(AppState.currentBatch.id, { status: 'pending_approval' });
 
@@ -711,7 +629,7 @@ async function loadReviewPage(index) {
   document.getElementById('rev-inspector-page').textContent = pageData.page_number;
   document.getElementById('rev-rot-badge').textContent = `${rot}°`;
   document.getElementById('rev-rot-meta').textContent = formatRotationLabel(rot);
-  document.getElementById('rev-session-learn-badge').textContent = `${AppState.sessionCorrections.length} correzioni apprese`;
+  document.getElementById('rev-session-learn-badge').textContent = `${AppState.sessionCorrections.length} correzioni`;
 
   await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas', rot);
 
@@ -776,7 +694,7 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
     const remainingUnverified = AppState.pagesData.slice(AppState.currentReviewIndex + 1).filter(p => !p.is_verified);
     if (remainingUnverified.length > 0) {
       const reapplyBtn = document.getElementById('btn-rev-reapply-remaining');
-      reapplyBtn.textContent = `🧠 Rianalizza le ${remainingUnverified.length} Pagine Successive con la Nuova Posizione/Regola`;
+      reapplyBtn.textContent = `↻ Rianalizza le ${remainingUnverified.length} Pagine Successive nella Nuova Posizione`;
       reapplyBtn.classList.remove('hidden');
     }
   }
@@ -787,60 +705,40 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
 async function reapplyLearnedRulesToRemainingPages() {
   const btn = document.getElementById('btn-rev-reapply-remaining');
   btn.disabled = true;
+  const offscreenCanvas = document.createElement('canvas');
 
   const targetTypeId = AppState.latestCalibratedTypeId || AppState.pagesData[AppState.currentReviewIndex].detected_type_id;
   const targetBox = AppState.latestCalibratedBox || AppState.pagesData[AppState.currentReviewIndex].bounding_box;
-  const searchWindowMeta = expandBoxWithMargin(targetBox, 12);
 
-  const pendingIndices = [];
   for (let i = AppState.currentReviewIndex + 1; i < AppState.pagesData.length; i++) {
-    if (!AppState.pagesData[i].is_verified) pendingIndices.push(i);
+    const p = AppState.pagesData[i];
+    if (p.is_verified) continue;
+
+    btn.textContent = `⏳ Ricalibrazione Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
+    await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
+    const cropBase64 = extractCroppedImageWithPadding(offscreenCanvas, targetBox, 6, null);
+
+    const res = await ApiService.analyzePageImage(
+      null,
+      p.page_number,
+      AppState.contentTypes,
+      { primaryTypeId: targetTypeId, referenceBox: targetBox },
+      targetBox,
+      cropBase64
+    );
+
+    p.detected_type_id = res.detected_type_id;
+    p.ai_initial_value = res.detected_value;
+    p.detected_value = res.detected_value;
+    p.raw_text_read = res.raw_text_read;
+    p.bounding_box = { ...targetBox };
+    p.confidence = res.confidence;
   }
-
-  let done = 0;
-  const CONCURRENCY = 4;
-  const worker = async () => {
-    const localCanvas = document.createElement('canvas');
-    while (pendingIndices.length > 0) {
-      const idx = pendingIndices.shift();
-      if (idx === undefined) break;
-      const p = AppState.pagesData[idx];
-
-      const base64Img = await renderPdfPageToElement(p.page_number, localCanvas, p.rotation || 0);
-      const searchCropBase64 = extractCroppedImageWithPadding(localCanvas, targetBox, 12, null);
-
-      const res = await ApiService.analyzePageImage(
-        base64Img,
-        p.page_number,
-        AppState.contentTypes,
-        {
-          primaryTypeId: targetTypeId,
-          referenceBox: targetBox,
-          sessionCorrections: AppState.sessionCorrections
-        },
-        null,
-        searchCropBase64,
-        searchWindowMeta
-      );
-
-      p.detected_type_id = res.detected_type_id;
-      p.ai_initial_value = res.detected_value;
-      p.detected_value = res.detected_value;
-      p.raw_text_read = res.raw_text_read;
-      p.bounding_box = res.bounding_box;
-      p.confidence = res.confidence;
-
-      done++;
-      btn.textContent = `⏳ Ricalibrate ${done} pagine...`;
-    }
-  };
-
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pendingIndices.length) }, () => worker()));
 
   btn.disabled = false;
   btn.classList.add('hidden');
   updateRunningSumDisplay();
-  alert('Pagine successive rianalizzate con successo nella nuova posizione calibrata!');
+  alert('Pagine successive rianalizzate nella nuova posizione!');
   if (AppState.currentReviewIndex < AppState.pagesData.length - 1) {
     loadReviewPage(AppState.currentReviewIndex + 1);
   }
@@ -958,28 +856,6 @@ function resetScanner() {
   setScannerStep(1);
 }
 
-// ============================================================================
-// 4. UTILITY PDF.JS, CONTRASTO OCR & BOUNDING BOX
-// ============================================================================
-function canvasToOptimizedDataUrl(srcCanvas, maxDim = 900, quality = 0.78, enhanceContrast = false) {
-  const w = srcCanvas.width;
-  const h = srcCanvas.height;
-  const scale = Math.max(w, h) > maxDim ? (maxDim / Math.max(w, h)) : 1;
-  const temp = document.createElement('canvas');
-  temp.width = Math.round(w * scale);
-  temp.height = Math.round(h * scale);
-  const ctx = temp.getContext('2d');
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, temp.width, temp.height);
-
-  if (enhanceContrast) {
-    ctx.filter = 'grayscale(100%) contrast(155%) brightness(105%)';
-  }
-  ctx.drawImage(srcCanvas, 0, 0, temp.width, temp.height);
-  return temp.toDataURL('image/jpeg', quality);
-}
-
 async function renderPdfPageToCanvas(pageNum, canvasId, extraRotation = 0) {
   const canvas = document.getElementById(canvasId);
   return await renderPdfPageToElement(pageNum, canvas, extraRotation);
@@ -990,7 +866,6 @@ async function renderPdfPageToElement(pageNum, canvasEl, extraRotation = 0) {
   const nativeRotation = page.rotate || 0;
   const totalRotation = normalizeAngle(nativeRotation + extraRotation);
 
-  // Render ad alta risoluzione (2.2x) per ritagli zoomati nitidissimi, ma invio pagina intera leggera (900px)
   const viewport = page.getViewport({ scale: 2.2, rotation: totalRotation });
   const ctx = canvasEl.getContext('2d');
   canvasEl.width = viewport.width;
@@ -1000,10 +875,10 @@ async function renderPdfPageToElement(pageNum, canvasEl, extraRotation = 0) {
   ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
 
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return canvasToOptimizedDataUrl(canvasEl, 900, 0.78, false);
+  return canvasEl.toDataURL('image/jpeg', 0.85);
 }
 
-function expandBoxWithMargin(box, marginPct = 10) {
+function expandBoxWithMargin(box, marginPct = 5) {
   const x = Math.max(0, box.x - marginPct);
   const y = Math.max(0, box.y - marginPct);
   const right = Math.min(100, box.x + box.w + marginPct);
@@ -1033,9 +908,11 @@ function extractCroppedImageWithPadding(srcCanvas, box, paddingPct = 5, previewC
   const ctx = tempCanvas.getContext('2d');
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, sw, sh);
+  // Contrasto elevato in scala di grigi per migliorare la lettura OCR locale
+  ctx.filter = 'grayscale(100%) contrast(160%) brightness(105%)';
   ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
-  return canvasToOptimizedDataUrl(tempCanvas, 800, 0.90, true);
+  return tempCanvas.toDataURL('image/jpeg', 0.92);
 }
 
 function applyBoundingBox(bboxElementId, box) {
@@ -1101,9 +978,6 @@ function updateLearnedBadge(badgeId, typeObj) {
   el.textContent = `${count} esempi appresi nel DB`;
 }
 
-// ============================================================================
-// 5. BACKOFFICE TIPOLOGIE (CRUD) & STORICO
-// ============================================================================
 function populateTypeSelects() {
   const selects = [document.getElementById('cal-type-select'), document.getElementById('rev-type-select')];
   selects.forEach(sel => {
@@ -1153,17 +1027,13 @@ function renderBackofficeTable() {
   tbody.innerHTML = '';
 
   AppState.contentTypes.forEach(t => {
-    const learnedCount = Array.isArray(t.learned_examples) ? t.learned_examples.length : 0;
     const boxStr = t.expected_box ? `X:${t.expected_box.x}% Y:${t.expected_box.y}%` : 'Auto';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><code>${t.code}</code></td>
       <td><strong>${t.name}</strong><br><small style="color:#64748b">${t.ai_hints || ''}</small></td>
       <td>${t.target_field_label} ${t.unit ? `(${t.unit})` : ''}</td>
-      <td>
-        <span class="learned-badge">${learnedCount} correzioni apprese</span><br>
-        <small style="color:#64748b">Area attesa: <code>${boxStr}</code></small>
-      </td>
+      <td><code>${boxStr}</code></td>
       <td class="text-right">
         <button class="btn btn-outline btn-sm" onclick="editContentType('${t.id}')">Modifica</button>
         <button class="btn btn-danger-outline btn-sm" onclick="removeContentType('${t.id}')">Elimina</button>

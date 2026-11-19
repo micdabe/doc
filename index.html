@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DocScanner AI — Gestione e Riconoscimento Moduli PDF</title>
+  <title>DocScanner — Gestione e Riconoscimento Moduli PDF (OCR Locale Statico)</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 
@@ -31,12 +32,12 @@
     <!-- Barra Superiore -->
     <header class="topbar">
       <div class="brand">
-        <span class="brand-badge">IDP + AI</span>
+        <span class="brand-badge">OCR LOCALE</span>
         <h1>Scansione Certificati & Moduli</h1>
       </div>
       <nav class="nav-tabs">
         <button class="nav-btn active" data-tab="scanner-view">Scanner PDF</button>
-        <button class="nav-btn" data-tab="backoffice-view">Backoffice & Memoria AI</button>
+        <button class="nav-btn" data-tab="backoffice-view">Backoffice Tipologie</button>
         <button class="nav-btn" data-tab="history-view">Storico Scansioni</button>
       </nav>
       <div class="topbar-actions">
@@ -54,7 +55,7 @@
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-2"><span>2</span> Calibrazione Pag. 1</div>
         <div class="step-line"></div>
-        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Parallela</div>
+        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Locale</div>
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-4"><span>4</span> Verifica Somme (Sì/No)</div>
         <div class="step-line"></div>
@@ -65,8 +66,8 @@
       <section id="step-upload" class="step-panel">
         <div class="upload-dropzone" id="dropzone">
           <div class="upload-icon">📄</div>
-          <h3>Trascina qui il file PDF con i moduli compilati a mano</h3>
-          <p>oppure clicca per selezionare un documento dal computer</p>
+          <h3>Trascina qui il file PDF con i moduli</h3>
+          <p>oppure clicca per selezionare un documento dal computer (OCR 100% locale nel browser, senza limiti)</p>
           <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
           <button class="btn btn-primary" onclick="document.getElementById('pdf-file-input').click()">Seleziona File PDF</button>
         </div>
@@ -88,7 +89,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per disegnare il riquadro attorno al numero: l'OCR leggerà subito quell'area e userà questa posizione per cercare sulle pagine successive.</span>
+              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per disegnare il riquadro attorno al numero: Tesseract.js rileggerà subito l'area e userà questa posizione sulle pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -104,12 +105,12 @@
                 <h3>Riconoscimento Primo Certificato</h3>
                 <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
               </div>
-              <p>Verifica la posizione del riquadro e il numero estratto prima di avviare l'analisi su tutto il PDF.</p>
+              <p>Verifica la posizione del riquadro e il valore estratto prima di avviare l'elaborazione su tutto il PDF.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata all'OCR (Zoom Alto Contrasto)</span>
+                <span>🔍 Area Inviata a Tesseract.js (Alto Contrasto)</span>
                 <small id="cal-learned-count-badge" class="learned-badge">0 esempi appresi</small>
               </div>
               <canvas id="cal-crop-canvas" class="crop-canvas"></canvas>
@@ -129,7 +130,7 @@
             </div>
 
             <div class="meta-box">
-              <div>Confidenza & Testo Grezzo: <strong id="cal-confidence">--</strong></div>
+              <div>Confidenza & Testo Letto: <strong id="cal-confidence">--</strong></div>
               <div>Orientamento Pagina: <strong id="cal-rot-meta">0° (Normale)</strong></div>
               <div>Coordinate Riquadro (X, Y, W, H): <code id="cal-coords-display">--</code></div>
             </div>
@@ -148,7 +149,7 @@
       <section id="step-processing" class="step-panel hidden">
         <div class="processing-card">
           <div class="spinner"></div>
-          <h3>Elaborazione parallela dei certificati in corso...</h3>
+          <h3>Elaborazione OCR locale in corso...</h3>
           <p id="proc-status-text">Avvio analisi...</p>
           <div class="progress-bar-track">
             <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
@@ -228,7 +229,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 Trascina sul foglio per riposizionare il riquadro: l'OCR rileggerà subito l'area e aggiornerà la zona di ricerca per le pagine successive.</span>
+              <span>🎯 Trascina sul foglio per riposizionare il riquadro: Tesseract.js rileggerà subito l'area selezionata.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -244,12 +245,12 @@
                 <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
                 <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
               </div>
-              <p>Se modifichi il riquadro o il valore, il sistema apprende la nuova area di ricerca per le pagine successive.</p>
+              <p>Controlla o modifica il valore e la tipologia per ciascuna pagina.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata all'OCR (Zoom Alto Contrasto)</span>
+                <span>🔍 Area Inviata a Tesseract.js (Alto Contrasto)</span>
                 <small id="rev-session-learn-badge" class="learned-badge">0 correzioni apprese</small>
               </div>
               <canvas id="rev-crop-canvas" class="crop-canvas"></canvas>
@@ -274,16 +275,16 @@
             </div>
 
             <div class="meta-box">
-              <div>Confidenza & Testo Grezzo: <strong id="rev-confidence">--</strong></div>
+              <div>Confidenza & Testo Letto: <strong id="rev-confidence">--</strong></div>
               <div>Orientamento Pagina: <strong id="rev-rot-meta">0°</strong></div>
             </div>
 
             <div class="inspector-actions-vertical">
               <button id="btn-rev-accept-page" class="btn btn-primary btn-full">
-                ✓ Salva Correzione, Addestra AI e Vai alla Successiva
+                ✓ Accetta / Salva Pagina e Vai alla Successiva
               </button>
               <button id="btn-rev-reapply-remaining" class="btn btn-outline btn-full hidden">
-                🧠 Rianalizza Pagine Successive Non Verificate con la Nuova Posizione/Regola
+                ↻ Rianalizza Pagine Successive Non Verificate nella Nuova Posizione
               </button>
               <button id="btn-rev-finish-all" class="btn btn-success btn-full">
                 ✔ Termina Revisione e Genera Output Finale
@@ -343,7 +344,7 @@
 
     </main>
 
-    <!-- VISTA B: BACKOFFICE TIPOLOGIE & MEMORIA AI -->
+    <!-- VISTA B: BACKOFFICE TIPOLOGIE -->
     <main id="backoffice-view" class="view-section hidden">
       <div class="backoffice-layout">
         <div class="bo-form-card">
@@ -373,8 +374,8 @@
             </div>
 
             <div class="form-group">
-              <label for="bo-hints">Istruzioni AI / Parole Chiave sul Modulo</label>
-              <textarea id="bo-hints" rows="3" class="form-control" placeholder="Descrivi dove si trova il valore scritto a mano o quali parole stampate ci sono vicino..."></textarea>
+              <label for="bo-hints">Parole Chiave sul Modulo (per riconoscimento tipologia)</label>
+              <textarea id="bo-hints" rows="3" class="form-control" placeholder="Parole stampate presenti sul modulo..."></textarea>
             </div>
 
             <div class="form-actions">
@@ -387,8 +388,8 @@
         <div class="bo-list-card">
           <div class="card-header-flex">
             <div>
-              <h3>Tipologie Configurate & Memoria Appresa</h3>
-              <p>Il sistema aggiorna automaticamente coordinate ed esempi ogni volta che correggi una lettura.</p>
+              <h3>Tipologie Configurate</h3>
+              <p>Sincronizzate con la tabella <code>doc_content_types</code> su Supabase.</p>
             </div>
             <button id="btn-bo-refresh" class="btn btn-outline btn-sm">↻ Aggiorna</button>
           </div>
@@ -399,7 +400,7 @@
                 <th>Codice</th>
                 <th>Nome Tipologia</th>
                 <th>Campo Valore</th>
-                <th>Memoria Appresa (DB)</th>
+                <th>Area Appresa</th>
                 <th class="text-right">Azioni</th>
               </tr>
             </thead>
@@ -456,11 +457,6 @@
         <div class="form-group">
           <label>Supabase Anon Public Key</label>
           <input type="password" id="cfg-supabase-key" class="form-control" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
-        </div>
-
-        <div class="form-group">
-          <label>Nome Supabase Edge Function (Gemini Vision)</label>
-          <input type="text" id="cfg-edge-fn" class="form-control" placeholder="analyze-doc">
         </div>
 
         <hr class="divider">
