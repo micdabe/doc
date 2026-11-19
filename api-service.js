@@ -1,6 +1,6 @@
 /**
- * API SERVICE LAYER (100% REALE — NESSUNA SIMULAZIONE)
- * Legge esclusivamente da window.DOCSCANNER_CONFIG (config.js) con priorità assoluta.
+ * API SERVICE LAYER (100% REALE — CON TIMEOUT DI SICUREZZA E RETRY)
+ * Legge esclusivamente da window.DOCSCANNER_CONFIG (config.js).
  */
 
 const ApiService = {
@@ -208,28 +208,46 @@ const ApiService = {
     return data || [];
   },
 
+  // Chiamata protetta da timeout lato browser (24 secondi) così nessuna pagina può bloccare il ciclo
   async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
     if (!this.supabase) {
       throw new Error('Client Supabase non inizializzato. Verifica config.js.');
     }
 
-    const base64Clean = base64DataUrl.split(',')[1];
+    const base64Clean = base64DataUrl ? base64DataUrl.split(',')[1] : null;
     const croppedBase64Clean = croppedBase64Url ? croppedBase64Url.split(',')[1] : null;
     const fnName = this.config.edgeFunctionName || 'analyze-doc';
 
-    try {
-      const { data, error } = await this.supabase.functions.invoke(fnName, {
-        body: {
-          base64Clean,
-          croppedBase64Clean,
-          searchWindowMeta,
-          pageNumber,
-          availableTypes,
-          priorContext,
-          targetBox
-        }
-      });
+    const invokeWithTimeout = () => {
+      return Promise.race([
+        this.supabase.functions.invoke(fnName, {
+          body: {
+            base64Clean,
+            croppedBase64Clean,
+            searchWindowMeta,
+            pageNumber,
+            availableTypes,
+            priorContext,
+            targetBox
+          }
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`Timeout 24s sulla pagina ${pageNumber}`)), 24000)
+        )
+      ]);
+    };
 
+    try {
+      let result;
+      try {
+        result = await invokeWithTimeout();
+      } catch (firstErr) {
+        // Un secondo tentativo automatico dopo 1.2s in caso di rete lenta / rate limit momentaneo
+        await new Promise(r => setTimeout(r, 1200));
+        result = await invokeWithTimeout();
+      }
+
+      const { data, error } = result;
       if (error) {
         throw new Error(error.message || `Errore invocazione Edge Function '${fnName}'`);
       }
@@ -246,12 +264,12 @@ const ApiService = {
         errorMsg: null
       };
     } catch (err) {
-      console.error('Errore reale Edge Function OCR:', err);
+      console.error(`Errore OCR Pagina ${pageNumber}:`, err);
       const fallbackBox = targetBox || priorContext?.referenceBox || availableTypes[0]?.expected_box || { x: 60, y: 70, w: 20, h: 7 };
       return {
         detected_type_id: priorContext?.primaryTypeId || availableTypes[0]?.id,
         detected_value: 0,
-        raw_text_read: 'ERRORE OCR',
+        raw_text_read: 'ERRORE / TIMEOUT',
         bounding_box: fallbackBox,
         confidence: 0,
         errorMsg: err.message || 'Errore sconosciuto nella Edge Function'
