@@ -1,5 +1,9 @@
 /**
- * CONTROLLER PRINCIPALE DELL'APPLICAZIONE (v8 — 100% OCR REALE, ZERO SIMULAZIONI)
+ * CONTROLLER PRINCIPALE DELL'APPLICAZIONE (v9)
+ * - Inizializzazione immediata dello stato di pagina e riquadro così i pulsanti di rotazione
+ *   funzionano istantaneamente senza aspettare l'OCR.
+ * - Ridimensionamento intelligente dell'immagine inviata alla Edge Function (max 1400px) per evitare
+ *   timeout su scansioni PDF ad altissima risoluzione.
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -36,13 +40,14 @@ document.addEventListener('DOMContentLoaded', () => {
     'cal-canvas-wrapper',
     'cal-bbox',
     (newBox) => {
-      if (AppState.pagesData[0]) {
-        AppState.pagesData[0].bounding_box = newBox;
-        AppState.latestCalibratedBox = { ...newBox };
-        document.getElementById('cal-coords-display').textContent =
-          `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
-        extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), newBox, 4, 'cal-crop-canvas');
+      if (!AppState.pagesData[0]) {
+        AppState.pagesData[0] = { page_number: 1, rotation: 0, bounding_box: newBox };
       }
+      AppState.pagesData[0].bounding_box = newBox;
+      AppState.latestCalibratedBox = { ...newBox };
+      document.getElementById('cal-coords-display').textContent =
+        `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
+      extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), newBox, 4, 'cal-crop-canvas');
     },
     async (finalBox) => {
       await runTargetedOcrOnCalibrationBox(finalBox);
@@ -228,7 +233,7 @@ function showOcrErrorBanner(containerId, errorMsg) {
   const banner = document.getElementById(containerId);
   if (!banner) return;
   if (errorMsg) {
-    banner.textContent = `⚠️ Errore Edge Function OCR: ${errorMsg} (Verifica che la funzione 'analyze-doc' sia deployata su Supabase con il Secret GEMINI_API_KEY)`;
+    banner.textContent = `⚠️ Errore Edge Function OCR: ${errorMsg}`;
     banner.classList.remove('hidden');
   } else {
     banner.classList.add('hidden');
@@ -326,13 +331,13 @@ function setupScannerWorkflow() {
 }
 
 async function runTargetedOcrOnCalibrationBox(box) {
-  if (!AppState.pagesData[0]) return;
+  if (!AppState.pagesData[0] || !box) return;
   const liveBadge = document.getElementById('cal-ocr-live-badge');
   liveBadge.textContent = 'Lettura Gemini OCR...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
-  const fullBase64 = fullCanvas.toDataURL('image/jpeg', 0.90);
+  const fullBase64 = canvasToOptimizedDataUrl(fullCanvas, 1400, 0.85);
   const croppedBase64 = extractCroppedImageWithPadding(fullCanvas, box, 4, 'cal-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
@@ -368,14 +373,14 @@ async function runTargetedOcrOnCalibrationBox(box) {
 
 async function runTargetedOcrOnReviewBox(box) {
   const pageObj = AppState.pagesData[AppState.currentReviewIndex];
-  if (!pageObj) return;
+  if (!pageObj || !box) return;
 
   const liveBadge = document.getElementById('rev-ocr-live-badge');
   liveBadge.textContent = 'Lettura Gemini OCR...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
-  const fullBase64 = fullCanvas.toDataURL('image/jpeg', 0.90);
+  const fullBase64 = canvasToOptimizedDataUrl(fullCanvas, 1400, 0.85);
   const croppedBase64 = extractCroppedImageWithPadding(fullCanvas, box, 4, 'rev-crop-canvas');
 
   const selectedTypeId = document.getElementById('rev-type-select').value;
@@ -424,7 +429,14 @@ function formatRotationLabel(deg) {
 }
 
 async function rotateCalibrationPage(deltaDegrees) {
-  if (!AppState.pagesData[0]) return;
+  if (!AppState.pdfDoc) return;
+  if (!AppState.pagesData[0]) {
+    AppState.pagesData[0] = {
+      page_number: 1,
+      rotation: 0,
+      bounding_box: { x: 60, y: 70, w: 20, h: 7 }
+    };
+  }
   const newRot = normalizeAngle((AppState.pagesData[0].rotation || 0) + deltaDegrees);
   AppState.pagesData[0].rotation = newRot;
 
@@ -438,7 +450,7 @@ async function rotateCalibrationPage(deltaDegrees) {
 
 async function rotateReviewPage(deltaDegrees) {
   const pageObj = AppState.pagesData[AppState.currentReviewIndex];
-  if (!pageObj) return;
+  if (!pageObj || !AppState.pdfDoc) return;
   const newRot = normalizeAngle((pageObj.rotation || 0) + deltaDegrees);
   pageObj.rotation = newRot;
 
@@ -464,37 +476,69 @@ async function handlePdfFileSelected(file) {
   AppState.currentBatch = await ApiService.createBatch(file.name, totalPages);
   AppState.pagesData = new Array(totalPages);
 
+  const defaultType = AppState.contentTypes[0];
+  const initialBox = defaultType?.expected_box || { x: 60, y: 70, w: 20, h: 7 };
+
+  // Inizializza SUBITO la Pagina 1 prima di chiamare l'API, così rotazione e riquadro funzionano immediatamente!
+  AppState.pagesData[0] = {
+    page_number: 1,
+    detected_type_id: defaultType?.id || null,
+    ai_initial_value: 0,
+    detected_value: 0,
+    raw_text_read: '',
+    bounding_box: { ...initialBox },
+    rotation: 0,
+    confidence: 0,
+    is_verified: false,
+    notes: ''
+  };
+  AppState.latestCalibratedTypeId = defaultType?.id || null;
+  AppState.latestCalibratedBox = { ...initialBox };
+
+  populateTypeSelects();
   document.getElementById('cal-total-pages').textContent = totalPages;
   document.getElementById('cal-rot-badge').textContent = '0°';
   document.getElementById('cal-rot-meta').textContent = formatRotationLabel(0);
+  document.getElementById('cal-coords-display').textContent =
+    `X:${initialBox.x}% Y:${initialBox.y}% W:${initialBox.w}% H:${initialBox.h}%`;
+  applyBoundingBox('cal-bbox', initialBox);
+
   setScannerStep(2);
 
+  // Renderizza subito il PDF sullo schermo
   const base64Page1 = await renderPdfPageToCanvas(1, 'cal-pdf-canvas', 0);
+  extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), initialBox, 4, 'cal-crop-canvas');
+
+  // Avvia la prima analisi automatica con indicatori visivi
+  const liveBadge = document.getElementById('cal-ocr-live-badge');
+  liveBadge.textContent = 'Analisi iniziale Gemini...';
+  liveBadge.classList.remove('hidden');
+
   const analysis = await ApiService.analyzePageImage(base64Page1, 1, AppState.contentTypes, null);
 
+  liveBadge.classList.add('hidden');
   showOcrErrorBanner('cal-ocr-error-banner', analysis.errorMsg);
 
+  // Aggiorna la Pagina 1 con il risultato dell'OCR
+  const userRot = AppState.pagesData[0].rotation || 0;
   AppState.pagesData[0] = {
-    page_number: 1,
-    detected_type_id: analysis.detected_type_id,
+    ...AppState.pagesData[0],
+    detected_type_id: analysis.detected_type_id || defaultType?.id,
     ai_initial_value: analysis.detected_value,
     detected_value: analysis.detected_value,
     raw_text_read: analysis.raw_text_read,
     bounding_box: { ...analysis.bounding_box },
-    rotation: 0,
-    confidence: analysis.confidence,
-    is_verified: false,
-    notes: ''
+    rotation: userRot,
+    confidence: analysis.confidence
   };
 
-  AppState.latestCalibratedTypeId = analysis.detected_type_id;
+  AppState.latestCalibratedTypeId = AppState.pagesData[0].detected_type_id;
   AppState.latestCalibratedBox = { ...analysis.bounding_box };
 
-  populateTypeSelects();
   const typeSelect = document.getElementById('cal-type-select');
-  typeSelect.value = analysis.detected_type_id;
+  typeSelect.value = AppState.pagesData[0].detected_type_id;
 
-  const matchedType = AppState.contentTypes.find(t => t.id === analysis.detected_type_id);
+  const matchedType = AppState.contentTypes.find(t => t.id === AppState.pagesData[0].detected_type_id);
   updateLearnedBadge('cal-learned-count-badge', matchedType);
   document.getElementById('cal-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
   document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${analysis.detected_value}`;
@@ -865,8 +909,23 @@ function resetScanner() {
 }
 
 // ============================================================================
-// 4. UTILITY PDF.JS, FINESTRA DI RICERCA CON MARGINE & BOUNDING BOX
+// 4. UTILITY PDF.JS, OTTIMIZZAZIONE IMMAGINE & BOUNDING BOX
 // ============================================================================
+function canvasToOptimizedDataUrl(srcCanvas, maxDim = 1400, quality = 0.85) {
+  const w = srcCanvas.width;
+  const h = srcCanvas.height;
+  if (w <= maxDim && h <= maxDim) {
+    return srcCanvas.toDataURL('image/jpeg', quality);
+  }
+  const scale = maxDim / Math.max(w, h);
+  const temp = document.createElement('canvas');
+  temp.width = Math.round(w * scale);
+  temp.height = Math.round(h * scale);
+  const ctx = temp.getContext('2d');
+  ctx.drawImage(srcCanvas, 0, 0, temp.width, temp.height);
+  return temp.toDataURL('image/jpeg', quality);
+}
+
 async function renderPdfPageToCanvas(pageNum, canvasId, extraRotation = 0) {
   const canvas = document.getElementById(canvasId);
   return await renderPdfPageToElement(pageNum, canvas, extraRotation);
@@ -877,13 +936,13 @@ async function renderPdfPageToElement(pageNum, canvasEl, extraRotation = 0) {
   const nativeRotation = page.rotate || 0;
   const totalRotation = normalizeAngle(nativeRotation + extraRotation);
 
-  const viewport = page.getViewport({ scale: 2.0, rotation: totalRotation });
+  const viewport = page.getViewport({ scale: 1.8, rotation: totalRotation });
   const ctx = canvasEl.getContext('2d');
   canvasEl.width = viewport.width;
   canvasEl.height = viewport.height;
 
   await page.render({ canvasContext: ctx, viewport }).promise;
-  return canvasEl.toDataURL('image/jpeg', 0.92);
+  return canvasToOptimizedDataUrl(canvasEl, 1400, 0.85);
 }
 
 function expandBoxWithMargin(box, marginPct = 10) {
@@ -916,7 +975,7 @@ function extractCroppedImageWithPadding(srcCanvas, box, paddingPct = 4, previewC
   const ctx = tempCanvas.getContext('2d');
   ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
 
-  return tempCanvas.toDataURL('image/jpeg', 0.95);
+  return canvasToOptimizedDataUrl(tempCanvas, 800, 0.92);
 }
 
 function applyBoundingBox(bboxElementId, box) {

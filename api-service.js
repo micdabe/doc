@@ -1,7 +1,6 @@
 /**
  * API SERVICE LAYER (100% REALE — NESSUNA SIMULAZIONE)
  * Legge esclusivamente da window.DOCSCANNER_CONFIG (config.js) con priorità assoluta.
- * Invoca esclusivamente la Supabase Edge Function 'analyze-doc' per il riconoscimento OCR.
  */
 
 const ApiService = {
@@ -9,7 +8,6 @@ const ApiService = {
   config: {},
 
   init() {
-    // Pulisce eventuali residui obsoleti di simulazione dal localStorage
     const savedRaw = localStorage.getItem('docscanner_config');
     let saved = {};
     if (savedRaw) {
@@ -25,7 +23,6 @@ const ApiService = {
 
     const fileConfig = window.DOCSCANNER_CONFIG || {};
 
-    // config.js ha SEMPRE priorità assoluta se valorizzato
     this.config = {
       supabaseUrl: (fileConfig.supabaseUrl && fileConfig.supabaseUrl.trim()) || saved.supabaseUrl || '',
       supabaseKey: (fileConfig.supabaseKey && fileConfig.supabaseKey.trim()) || saved.supabaseKey || '',
@@ -55,9 +52,6 @@ const ApiService = {
     return this.init();
   },
 
-  // =========================================================================
-  // 0. GESTIONE PASSWORD SUL DATABASE (Tabella: doc_app_settings)
-  // =========================================================================
   async verifyAppPassword(inputPassword) {
     if (!this.supabase) {
       throw new Error('Database Supabase non configurato in config.js.');
@@ -89,9 +83,6 @@ const ApiService = {
     return true;
   },
 
-  // =========================================================================
-  // 1. GESTIONE TIPOLOGIE E APPRENDIMENTO CONTINUO (Tabella: doc_content_types)
-  // =========================================================================
   async getContentTypes() {
     if (!this.supabase) return [];
     const { data, error } = await this.supabase
@@ -175,9 +166,6 @@ const ApiService = {
     return true;
   },
 
-  // =========================================================================
-  // 2. GESTIONE SESSIONI E PAGINE (Tabelle: doc_batches, doc_pages)
-  // =========================================================================
   async createBatch(filename, totalPages) {
     if (!this.supabase) throw new Error('Database Supabase non connesso.');
     const { data, error } = await this.supabase
@@ -220,9 +208,6 @@ const ApiService = {
     return data || [];
   },
 
-  // =========================================================================
-  // 3. MOTORE DI RICONOSCIMENTO REALE (ESCLUSIVAMENTE EDGE FUNCTION GEMINI)
-  // =========================================================================
   async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
     if (!this.supabase) {
       throw new Error('Client Supabase non inizializzato. Verifica config.js.');
