@@ -6,7 +6,7 @@
  * Nessuna modalità di simulazione o generatore casuale è presente nel sistema.
  */
 window.DOCSCANNER_CONFIG = {
-  supabaseUrl: '', // Es. 'https://xyzcompany.supabase.co'
-  supabaseKey: '', // Es. 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+  supabaseUrl: 'https://pqusarkwqpqzmyeysptc.supabase.co', // Es. 'https://xyzcompany.supabase.co'
+  supabaseKey: 'sb_publishable_Vilc0l0mqMItoxxOkMdk6A_01TCMPjQ', // Es. 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
   edgeFunctionName: 'analyze-doc'
 };
