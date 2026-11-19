@@ -1,5 +1,5 @@
 /**
- * API SERVICE LAYER (100% REALE — CON TIMEOUT DI SICUREZZA E RETRY)
+ * API SERVICE LAYER (100% REALE — VELOCE & PARALLELO)
  * Legge esclusivamente da window.DOCSCANNER_CONFIG (config.js).
  */
 
@@ -208,7 +208,6 @@ const ApiService = {
     return data || [];
   },
 
-  // Chiamata protetta da timeout lato browser (24 secondi) così nessuna pagina può bloccare il ciclo
   async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
     if (!this.supabase) {
       throw new Error('Client Supabase non inizializzato. Verifica config.js.');
@@ -232,7 +231,7 @@ const ApiService = {
           }
         }),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Timeout 24s sulla pagina ${pageNumber}`)), 24000)
+          setTimeout(() => reject(new Error(`Timeout 16s sulla pagina ${pageNumber}`)), 16000)
         )
       ]);
     };
@@ -242,8 +241,7 @@ const ApiService = {
       try {
         result = await invokeWithTimeout();
       } catch (firstErr) {
-        // Un secondo tentativo automatico dopo 1.2s in caso di rete lenta / rate limit momentaneo
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, 600));
         result = await invokeWithTimeout();
       }
 
