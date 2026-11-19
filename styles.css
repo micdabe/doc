@@ -28,7 +28,6 @@ body {
 
 .hidden { display: none !important; }
 
-/* --- LOGIN OVERLAY --- */
 .login-overlay {
   position: fixed;
   inset: 0;
@@ -83,7 +82,6 @@ body {
   font-weight: 600;
 }
 
-/* --- TOPBAR --- */
 .topbar {
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
@@ -123,7 +121,6 @@ body {
 
 .topbar-actions { display: flex; align-items: center; gap: 0.75rem; }
 
-/* --- STEPPER --- */
 .workflow-stepper {
   display: flex;
   align-items: center;
@@ -159,7 +156,6 @@ body {
 
 .step-line { width: 40px; height: 2px; background: var(--border); }
 
-/* --- LAYOUT CONTENUTO --- */
 .view-section { padding: 1.5rem; max-width: 1440px; margin: 0 auto; }
 
 .upload-dropzone {
@@ -177,7 +173,6 @@ body {
 .upload-dropzone h3 { margin-bottom: 0.5rem; }
 .upload-dropzone p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
 
-/* --- SPLIT WORKSPACE --- */
 .split-workspace {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
@@ -247,7 +242,6 @@ body {
   height: auto;
 }
 
-/* Riquadro di Evidenziazione sul PDF (Bounding Box) */
 .bbox-overlay {
   position: absolute;
   border: 3px solid #ef4444;
@@ -268,7 +262,6 @@ body {
   white-space: nowrap;
 }
 
-/* --- ZOOM CROP PREVIEW --- */
 .crop-preview-box {
   background: #f8fafc;
   border: 1px solid var(--border);
@@ -302,7 +295,6 @@ body {
   border-radius: 4px;
 }
 
-/* --- FORM & CONTROLLI --- */
 .card-header { margin-bottom: 1.1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
 .header-with-status { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .card-header p { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem; }
@@ -340,7 +332,6 @@ body {
   gap: 0.3rem;
 }
 
-/* --- BOTTONI --- */
 .btn {
   display: inline-flex;
   align-items: center;
@@ -370,7 +361,6 @@ body {
 .inspector-actions { display: flex; justify-content: space-between; gap: 0.75rem; }
 .inspector-actions-vertical { display: flex; flex-direction: column; gap: 0.65rem; }
 
-/* --- TABELLE & DECISION GATE --- */
 .decision-card, .output-card { max-width: 960px; margin: 0 auto; }
 .data-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
 .data-table th, .data-table td {
@@ -395,7 +385,6 @@ body {
   margin-top: 1rem;
 }
 
-/* --- REVIEW TOPBAR --- */
 .review-topbar {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -409,7 +398,6 @@ body {
 .review-nav-controls { display: flex; align-items: center; gap: 0.75rem; }
 .review-live-total { font-size: 1.05rem; color: var(--primary); }
 
-/* --- BACKOFFICE --- */
 .backoffice-layout {
   display: grid;
   grid-template-columns: 380px 1fr;
@@ -420,7 +408,6 @@ body {
 .form-row .form-group { flex: 1; }
 .card-header-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
 
-/* --- PILLS & ALERTS --- */
 .status-pill {
   display: inline-block;
   padding: 0.2rem 0.6rem;
@@ -441,7 +428,6 @@ body {
   font-size: 0.9rem;
 }
 
-/* --- PROCESSING --- */
 .processing-card {
   background: var(--bg-card);
   max-width: 520px;
@@ -475,7 +461,6 @@ body {
   transition: width 0.25s;
 }
 
-/* --- MODALE CONFIGURAZIONE --- */
 .modal-overlay {
   position: fixed;
   inset: 0;

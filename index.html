@@ -88,7 +88,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per disegnare il riquadro attorno al numero: l'OCR leggerà subito quell'area e userà questa posizione per cercare sulle pagine successive.</span>
+              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per disegnare il riquadro attorno al numero: l'OCR Gemini leggerà subito quell'area e userà questa posizione per cercare sulle pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -102,14 +102,14 @@
             <div class="card-header">
               <div class="header-with-status">
                 <h3>Riconoscimento Primo Certificato</h3>
-                <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+                <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">OCR Gemini in corso...</span>
               </div>
               <p>Verifica la posizione del riquadro e il numero estratto prima di avviare l'analisi su tutto il PDF.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata all'OCR (con margine)</span>
+                <span>🔍 Area Inviata a Gemini OCR (con margine)</span>
                 <small id="cal-learned-count-badge" class="learned-badge">0 esempi appresi</small>
               </div>
               <canvas id="cal-crop-canvas" class="crop-canvas"></canvas>
@@ -148,7 +148,7 @@
       <section id="step-processing" class="step-panel hidden">
         <div class="processing-card">
           <div class="spinner"></div>
-          <h3>Elaborazione adattiva dei certificati in corso...</h3>
+          <h3>Elaborazione adattiva con Gemini Vision in corso...</h3>
           <p id="proc-status-text">Analisi pagina 2 in corso...</p>
           <div class="progress-bar-track">
             <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
@@ -228,7 +228,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 Trascina sul foglio per riposizionare il riquadro: l'OCR rileggerà subito l'area e aggiornerà la zona di ricerca per le pagine successive.</span>
+              <span>🎯 Trascina sul foglio per riposizionare il riquadro: Gemini rileggerà subito l'area e aggiornerà la zona di ricerca per le pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -242,14 +242,14 @@
             <div class="card-header">
               <div class="header-with-status">
                 <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
-                <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+                <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">OCR Gemini in corso...</span>
               </div>
               <p>Se modifichi il riquadro o il valore, il sistema apprende la nuova area di ricerca per le pagine successive.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata all'OCR (con margine)</span>
+                <span>🔍 Area Inviata a Gemini OCR (con margine)</span>
                 <small id="rev-session-learn-badge" class="learned-badge">0 correzioni apprese</small>
               </div>
               <canvas id="rev-crop-canvas" class="crop-canvas"></canvas>
@@ -458,18 +458,8 @@
           <input type="password" id="cfg-supabase-key" class="form-control" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...">
         </div>
 
-        <hr class="divider">
-
         <div class="form-group">
-          <label>Modalità Motore di Riconoscimento (OCR Scrittura a Mano)</label>
-          <select id="cfg-ocr-mode" class="form-control">
-            <option value="edge_gemini">Supabase Edge Function (analyze-doc -> Gemini 2.5 Flash)</option>
-            <option value="simulation">Modalità Simulazione Locale (Test senza AI)</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Nome Supabase Edge Function</label>
+          <label>Nome Supabase Edge Function (Gemini Vision)</label>
           <input type="text" id="cfg-edge-fn" class="form-control" placeholder="analyze-doc">
         </div>
 

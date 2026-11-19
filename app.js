@@ -1,8 +1,5 @@
 /**
- * CONTROLLER PRINCIPALE DELL'APPLICAZIONE (v7)
- * - Rilancio automatico OCR al rilascio del rettangolo (con margine di sicurezza sul ritaglio)
- * - Ricerca adattiva sulle pagine 2..N attorno all'ultima posizione corretta dall'utente
- * - Visualizzazione chiara del testo grezzo letto dall'OCR e di eventuali errori Edge Function
+ * CONTROLLER PRINCIPALE DELL'APPLICAZIONE (v8 — 100% OCR REALE, ZERO SIMULAZIONI)
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -26,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (loginHint) {
     loginHint.textContent = isDbConnected
       ? 'Connesso a Supabase — Password verificata su database'
-      : 'DB non configurato in config.js (password fallback: admin2026)';
+      : 'ERRORE: Configura supabaseUrl e supabaseKey dentro config.js';
   }
 
   setupLogin();
@@ -35,7 +32,6 @@ document.addEventListener('DOMContentLoaded', () => {
   setupScannerWorkflow();
   setupBackoffice();
 
-  // Calibrazione Pagina 1: al rilascio del mouse -> nuovo OCR mirato immediato!
   setupBoundingBoxDrawing(
     'cal-canvas-wrapper',
     'cal-bbox',
@@ -53,7 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   );
 
-  // Revisione Pagina per Pagina: al rilascio del mouse -> nuovo OCR mirato + aggiorna coordinate di riferimento!
   setupBoundingBoxDrawing(
     'rev-canvas-wrapper',
     'rev-bbox',
@@ -94,19 +89,24 @@ function setupLogin() {
     submitBtn.textContent = 'Verifica su database...';
     errorMsg.classList.add('hidden');
 
-    const isValid = await ApiService.verifyAppPassword(passInput.value);
-
-    submitBtn.disabled = false;
-    submitBtn.textContent = 'Accedi al Sistema';
-
-    if (isValid) {
-      sessionStorage.setItem('docscanner_auth', 'true');
-      loginScreen.classList.add('hidden');
-      appContainer.classList.remove('hidden');
-      loadInitialData();
-    } else {
+    try {
+      const isValid = await ApiService.verifyAppPassword(passInput.value);
+      if (isValid) {
+        sessionStorage.setItem('docscanner_auth', 'true');
+        loginScreen.classList.add('hidden');
+        appContainer.classList.remove('hidden');
+        await loadInitialData();
+      } else {
+        errorMsg.textContent = 'Password non corretta. Riprova.';
+        errorMsg.classList.remove('hidden');
+        passInput.value = '';
+      }
+    } catch (err) {
+      errorMsg.textContent = err.message;
       errorMsg.classList.remove('hidden');
-      passInput.value = '';
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Accedi al Sistema';
     }
   });
 
@@ -128,7 +128,7 @@ function updateDbStatusBadge(connected) {
     badge.textContent = 'Supabase + Edge AI: Connessi';
     badge.className = 'status-pill status-ok';
   } else {
-    badge.textContent = 'DB: Modalità Locale (Configura config.js)';
+    badge.textContent = 'DB: Non Configurato in config.js';
     badge.className = 'status-pill status-warn';
   }
 }
@@ -159,8 +159,6 @@ function setupSettingsModal() {
   const fillModalFields = () => {
     document.getElementById('cfg-supabase-url').value = ApiService.config.supabaseUrl || '';
     document.getElementById('cfg-supabase-key').value = ApiService.config.supabaseKey || '';
-    document.getElementById('cfg-ocr-mode').value =
-      (ApiService.config.ocrMode === 'simulation') ? 'simulation' : 'edge_gemini';
     document.getElementById('cfg-edge-fn').value = ApiService.config.edgeFunctionName || 'analyze-doc';
     document.getElementById('cfg-app-password').value = '';
   };
@@ -177,14 +175,13 @@ function setupSettingsModal() {
     fillModalFields();
     updateDbStatusBadge(connected);
     await loadInitialData();
-    alert('Ripristinati i parametri di connessione dal file config.js.');
+    alert('Ripristinati i parametri dal file config.js.');
   });
 
   document.getElementById('btn-save-settings').addEventListener('click', async () => {
     const connected = ApiService.saveConfig({
       supabaseUrl: document.getElementById('cfg-supabase-url').value.trim(),
       supabaseKey: document.getElementById('cfg-supabase-key').value.trim(),
-      ocrMode: document.getElementById('cfg-ocr-mode').value,
       edgeFunctionName: document.getElementById('cfg-edge-fn').value.trim() || 'analyze-doc'
     });
 
@@ -205,7 +202,7 @@ function setupSettingsModal() {
 }
 
 // ============================================================================
-// 3. WORKFLOW SCANNER + OCR REATTIVO + RICERCA SPAZIALE ADATTIVA
+// 3. WORKFLOW SCANNER + OCR REALE + RICERCA SPAZIALE ADATTIVA
 // ============================================================================
 function setScannerStep(stepNumber) {
   const panels = ['step-upload', 'step-calibrate', 'step-processing', 'step-decision', 'step-review', 'step-output'];
@@ -228,10 +225,10 @@ function setScannerStep(stepNumber) {
 }
 
 function showOcrErrorBanner(containerId, errorMsg) {
-  let banner = document.getElementById(containerId);
+  const banner = document.getElementById(containerId);
   if (!banner) return;
   if (errorMsg) {
-    banner.textContent = `⚠️ Problema OCR: ${errorMsg} (Verifica che la Edge Function 'analyze-doc' sia pubblicata e abbia il Secret GEMINI_API_KEY)`;
+    banner.textContent = `⚠️ Errore Edge Function OCR: ${errorMsg} (Verifica che la funzione 'analyze-doc' sia deployata su Supabase con il Secret GEMINI_API_KEY)`;
     banner.classList.remove('hidden');
   } else {
     banner.classList.add('hidden');
@@ -254,7 +251,6 @@ function setupScannerWorkflow() {
     if (e.dataTransfer.files[0]) handlePdfFileSelected(e.dataTransfer.files[0]);
   });
 
-  // Rotazione Pagina 1
   document.getElementById('btn-cal-rot-ccw').addEventListener('click', () => rotateCalibrationPage(-90));
   document.getElementById('btn-cal-rot-180').addEventListener('click', () => rotateCalibrationPage(180));
   document.getElementById('btn-cal-rot-cw').addEventListener('click', () => rotateCalibrationPage(90));
@@ -262,7 +258,6 @@ function setupScannerWorkflow() {
     if (AppState.pagesData[0]) runTargetedOcrOnCalibrationBox(AppState.pagesData[0].bounding_box);
   });
 
-  // Rotazione in Revisione
   document.getElementById('btn-rev-rot-ccw').addEventListener('click', () => rotateReviewPage(-90));
   document.getElementById('btn-rev-rot-180').addEventListener('click', () => rotateReviewPage(180));
   document.getElementById('btn-rev-rot-cw').addEventListener('click', () => rotateReviewPage(90));
@@ -271,7 +266,6 @@ function setupScannerWorkflow() {
     if (p) runTargetedOcrOnReviewBox(p.bounding_box);
   });
 
-  // Cambio tipologia nel menu a discesa della Pagina 1
   document.getElementById('cal-type-select').addEventListener('change', async (e) => {
     const selectedType = AppState.contentTypes.find(t => t.id === e.target.value);
     if (selectedType) {
@@ -331,16 +325,14 @@ function setupScannerWorkflow() {
   document.getElementById('btn-export-csv').addEventListener('click', exportReportCsv);
 }
 
-// --- OCR MIRATO SUL RETTANGOLO (CALIBRAZIONE PAGINA 1) ---
 async function runTargetedOcrOnCalibrationBox(box) {
   if (!AppState.pagesData[0]) return;
   const liveBadge = document.getElementById('cal-ocr-live-badge');
-  liveBadge.textContent = 'Lettura OCR riquadro...';
+  liveBadge.textContent = 'Lettura Gemini OCR...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
   const fullBase64 = fullCanvas.toDataURL('image/jpeg', 0.90);
-  // Ritaglia con margine di sicurezza del 4% così non taglia mai le cifre ai bordi
   const croppedBase64 = extractCroppedImageWithPadding(fullCanvas, box, 4, 'cal-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
@@ -374,13 +366,12 @@ async function runTargetedOcrOnCalibrationBox(box) {
   setTimeout(() => liveBadge.classList.add('hidden'), 1800);
 }
 
-// --- OCR MIRATO SUL RETTANGOLO (REVISIONE PAGINA N) ---
 async function runTargetedOcrOnReviewBox(box) {
   const pageObj = AppState.pagesData[AppState.currentReviewIndex];
   if (!pageObj) return;
 
   const liveBadge = document.getElementById('rev-ocr-live-badge');
-  liveBadge.textContent = 'Lettura OCR riquadro...';
+  liveBadge.textContent = 'Lettura Gemini OCR...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
@@ -420,7 +411,6 @@ async function runTargetedOcrOnReviewBox(box) {
   setTimeout(() => liveBadge.classList.add('hidden'), 1800);
 }
 
-// --- ROTAZIONE PAGINE ---
 function normalizeAngle(angle) {
   return ((angle % 360) + 360) % 360;
 }
@@ -460,7 +450,6 @@ async function rotateReviewPage(deltaDegrees) {
   await runTargetedOcrOnReviewBox(pageObj.bounding_box);
 }
 
-// --- CARICAMENTO PDF E ANALISI PAGINA 1 ---
 async function handlePdfFileSelected(file) {
   if (AppState.contentTypes.length === 0) {
     alert('Configura almeno una Tipologia di Contenuto nel Backoffice prima di scansionare un PDF.');
@@ -518,7 +507,6 @@ async function handlePdfFileSelected(file) {
   extractCroppedImageWithPadding(document.getElementById('cal-pdf-canvas'), analysis.bounding_box, 4, 'cal-crop-canvas');
 }
 
-// --- ELABORAZIONE MASSIVA PAGINE 2..N CON FINESTRA DI RICERCA SULLA POSIZIONE CALIBRATA ---
 async function processRemainingPages() {
   const confirmedTypeId = document.getElementById('cal-type-select').value;
   const confirmedValue = parseFloat(document.getElementById('cal-value-input').value) || 0;
@@ -561,12 +549,9 @@ async function processRemainingPages() {
   for (let p = 2; p <= total; p++) {
     const pct = Math.round(((p - 1) / total) * 100);
     progressBar.style.width = `${pct}%`;
-    statusText.textContent = `Ricerca adattiva Pagina ${p} di ${total} nell'area calibrata (X:${confirmedBox.x}%, Y:${confirmedBox.y}%)...`;
+    statusText.textContent = `Ricerca adattiva Gemini Pagina ${p} di ${total} nell'area calibrata (X:${confirmedBox.x}%, Y:${confirmedBox.y}%)...`;
 
     const base64Img = await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-
-    // Ritaglia una finestra di ricerca allargata (+12% di margine attorno al riquadro calibrato dall'utente)
-    // Così l'AI cerca esattamente in quella zona del foglio anche se la scansione è leggermente traslata!
     const searchWindowMeta = expandBoxWithMargin(confirmedBox, 12);
     const searchCropBase64 = extractCroppedImageWithPadding(offscreenCanvas, confirmedBox, 12, null);
 
@@ -606,7 +591,6 @@ async function processRemainingPages() {
   setScannerStep(4);
 }
 
-// --- STEP 4: RIEPILOGO SOMME E DECISION GATE ---
 function renderDecisionSummary() {
   document.getElementById('dec-total-pages').textContent = AppState.pagesData.length;
   document.getElementById('dec-filename').textContent = AppState.currentBatch.filename;
@@ -636,7 +620,6 @@ function renderDecisionSummary() {
   }
 }
 
-// --- STEP 5B: REVISIONE PAGINA PER PAGINA + APPRENDIMENTO CONTINUO ---
 async function loadReviewPage(index) {
   if (index < 0 || index >= AppState.pagesData.length) return;
   AppState.currentReviewIndex = index;
@@ -733,7 +716,7 @@ async function reapplyLearnedRulesToRemainingPages() {
     const p = AppState.pagesData[i];
     if (p.is_verified) continue;
 
-    btn.textContent = `⏳ Ricalibrazione AI Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
+    btn.textContent = `⏳ Ricalibrazione Gemini Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
     const base64Img = await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
     const searchWindowMeta = expandBoxWithMargin(targetBox, 12);
     const searchCropBase64 = extractCroppedImageWithPadding(offscreenCanvas, targetBox, 12, null);
@@ -802,7 +785,6 @@ async function finishReviewAndShowOutput() {
   setScannerStep('5A');
 }
 
-// --- STEP 5A: OUTPUT FINALE ---
 function renderFinalOutput() {
   document.getElementById('out-filename').textContent = AppState.currentBatch.filename;
   document.getElementById('out-total-pages').textContent = AppState.pagesData.length;
@@ -895,7 +877,6 @@ async function renderPdfPageToElement(pageNum, canvasEl, extraRotation = 0) {
   const nativeRotation = page.rotate || 0;
   const totalRotation = normalizeAngle(nativeRotation + extraRotation);
 
-  // Risoluzione 2.0x per rendere nitidi anche i numeri scritti a mano piccoli
   const viewport = page.getViewport({ scale: 2.0, rotation: totalRotation });
   const ctx = canvasEl.getContext('2d');
   canvasEl.width = viewport.width;
