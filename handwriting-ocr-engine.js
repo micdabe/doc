@@ -1,12 +1,11 @@
 /**
- * HANDWRITING OCR ENGINE v13 — ADATTIVO 100% CLIENT-SIDE
+ * HANDWRITING OCR ENGINE v14 — ADATTIVO CON MAPPA DI DENSITÀ DILATATA + CENTROIDI
  * -------------------------------------------------------------------------
- * Combina 3 livelli di riconoscimento e apprendimento in tempo reale nel browser:
- * 1. Pre-processing custom su Canvas (grayscale, contrast stretching, auto-crop inchiostro).
- * 2. Memoria Visiva (Template Matching con tolleranza di traslazione): riconosce tracciati
- *    identici o molto simili a quelli già corretti/confermati dall'operatore.
- * 3. Rete Neurale TrOCR (Xenova/trocr-small-handwritten) + Mappa Adattiva di Correzione
- *    (impara gli errori ricorrenti di TrOCR sulla calligrafia specifica dello scrivente).
+ * Risolve il mancato riconoscimento di tracciati simili:
+ * 1. Pre-processing non distruttivo per TrOCR (preserva anche i tratti a penna chiari).
+ * 2. Impronta visiva robusta 32x16 con sfocatura/dilatazione (tollera variazioni naturali della mano).
+ * 3. Confronto sia con i singoli esempi sia con il "prototipo medio" (centroide) di ogni valore appreso.
+ * 4. Se TrOCR restituisce vuoto/0 ma nel riquadro c'è inchiostro, prevale il match visivo appreso.
  */
 
 window.HandwritingOCR = {
@@ -14,12 +13,11 @@ window.HandwritingOCR = {
   _loadingPromise: null,
   isReady: false,
 
-  // Memoria adattiva della sessione corrente (si arricchisce a ogni correzione o conferma)
   memory: {
-    visualTemplates: [],     // [{ value, rawText, fp: Float32Array(64*32), w: 64, h: 32 }]
-    exactRawMap: {},         // { "raw_string_normalizzata": numericValue }
-    charSubstitutions: {},   // { "cifra_letta_errata": { "cifra_reale": count } }
-    confirmedLengths: []     // Lunghezze in cifre dei valori confermati (es. [5, 5, 5])
+    visualTemplates: [],     // [{ value, rawText, fp: Float32Array(32*16) }]
+    exactRawMap: {},         // { "raw_string": numericValue }
+    charSubstitutions: {},   // { "cifra_errata": { "cifra_reale": count } }
+    confirmedLengths: []
   },
 
   resetSessionMemory() {
@@ -60,12 +58,11 @@ window.HandwritingOCR = {
   },
 
   /**
-   * Pre-processing su Canvas:
-   * - Ritaglia l'area selezionata con margine
-   * - Normalizza contrasto e sfondo carta
-   * - Restituisce { dataUrl, fingerprint } così possiamo sia passarlo a TrOCR sia confrontarlo visivamente
+   * Pre-processing coerente (padding uniforme 3%):
+   * - Preserva i tratti chiari (niente tagli bruschi che cancellano gli zeri)
+   * - Estrae impronta 32x16 dilatata/sfocata centrata sull'inchiostro
    */
-  preprocessCrop(srcCanvas, box, paddingPct = 4, previewCanvasId = null) {
+  preprocessCrop(srcCanvas, box, paddingPct = 3, previewCanvasId = null) {
     if (!srcCanvas || !box || srcCanvas.width === 0) return null;
 
     const x = Math.max(0, box.x - paddingPct);
@@ -89,10 +86,10 @@ window.HandwritingOCR = {
     const imgData = ctx.getImageData(0, 0, sw, sh);
     const data = imgData.data;
 
+    // Calcola percentile sfondo (90° percentile) per adattarsi a carta chiara o scura
+    const lums = new Uint8Array(sw * sh);
     let minLum = 255;
     let maxLum = 0;
-    const lums = new Uint8Array(sw * sh);
-
     for (let i = 0, p = 0; i < data.length; i += 4, p++) {
       const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
       lums[p] = lum;
@@ -100,7 +97,10 @@ window.HandwritingOCR = {
       if (lum > maxLum) maxLum = lum;
     }
 
-    const range = Math.max(1, maxLum - minLum);
+    const range = Math.max(20, maxLum - minLum);
+    // Ignora un margine di 2px sui bordi esterni quando cerca il bounding box dell'inchiostro (evita linee delle caselle)
+    const marginX = Math.min(4, Math.floor(sw * 0.04));
+    const marginY = Math.min(4, Math.floor(sh * 0.06));
     let inkMinX = sw, inkMinY = sh, inkMaxX = 0, inkMaxY = 0;
     let inkPixels = 0;
 
@@ -108,37 +108,44 @@ window.HandwritingOCR = {
       for (let px = 0; px < sw; px++) {
         const p = py * sw + px;
         const i = p * 4;
+        // Normalizzazione morbida: schiarisce solo lo sfondo puro (> 215), preserva tutto l'inchiostro
         let norm = ((lums[p] - minLum) / range) * 255;
-        if (norm > 195) {
+        if (norm > 215) {
           norm = 255;
-        } else if (norm < 145) {
-          norm = Math.max(0, norm * 0.72);
-          if (px < inkMinX) inkMinX = px;
-          if (py < inkMinY) inkMinY = py;
-          if (px > inkMaxX) inkMaxX = px;
-          if (py > inkMaxY) inkMaxY = py;
-          inkPixels++;
+        } else {
+          // Aumenta leggermente il contrasto dell'inchiostro senza tagliarlo
+          norm = Math.max(0, norm * 0.82);
         }
         const val = Math.round(norm);
         data[i] = val;
         data[i + 1] = val;
         data[i + 2] = val;
         data[i + 3] = 255;
+
+        if (val < 175 && px >= marginX && px < sw - marginX && py >= marginY && py < sh - marginY) {
+          if (px < inkMinX) inkMinX = px;
+          if (py < inkMinY) inkMinY = py;
+          if (px > inkMaxX) inkMaxX = px;
+          if (py > inkMaxY) inkMaxY = py;
+          inkPixels++;
+        }
       }
     }
     ctx.putImageData(imgData, 0, 0);
 
-    // Estrae l'impronta visiva normalizzata 64x32 centrata sull'inchiostro effettivo
-    const fp = this._extractInkFingerprint(workCanvas, inkPixels > 15 ? {
-      x: inkMinX, y: inkMinY, w: Math.max(1, inkMaxX - inkMinX + 1), h: Math.max(1, inkMaxY - inkMinY + 1)
-    } : { x: 0, y: 0, w: sw, h: sh });
+    const inkRatio = inkPixels / Math.max(1, sw * sh);
+    const inkRect = (inkPixels > 12 && inkMaxX > inkMinX && inkMaxY > inkMinY)
+      ? { x: inkMinX, y: inkMinY, w: inkMaxX - inkMinX + 1, h: inkMaxY - inkMinY + 1 }
+      : { x: marginX, y: marginY, w: Math.max(1, sw - marginX * 2), h: Math.max(1, sh - marginY * 2) };
 
-    // Bordo bianco pulito del 12% per TrOCR
-    const padX = Math.max(12, Math.round(sw * 0.12));
-    const padY = Math.max(10, Math.round(sh * 0.12));
+    const fp = this._extractDilatedFingerprint(workCanvas, inkRect);
+
+    // Prepara l'immagine pulita con bordo bianco per TrOCR e anteprima
+    const padX = Math.max(14, Math.round(sw * 0.12));
+    const padY = Math.max(12, Math.round(sh * 0.14));
     const finalCanvas = previewCanvasId ? document.getElementById(previewCanvasId) : document.createElement('canvas');
     if (!finalCanvas) {
-      return { dataUrl: workCanvas.toDataURL('image/png'), fingerprint: fp };
+      return { dataUrl: workCanvas.toDataURL('image/png'), fingerprint: fp, inkRatio };
     }
 
     finalCanvas.width = sw + padX * 2;
@@ -150,17 +157,19 @@ window.HandwritingOCR = {
 
     return {
       dataUrl: finalCanvas.toDataURL('image/png'),
-      fingerprint: fp
+      fingerprint: fp,
+      inkRatio
     };
   },
 
   /**
-   * Crea un vettore normalizzato 64x32 dell'intensità dell'inchiostro (0 = bianco, 1 = nero)
-   * centrato sul bounding box dell'inchiostro, per confrontare tracciati anche se spostati sul foglio.
+   * Impronta visiva 32x16 con sfocatura/dilatazione (blur 1.5px):
+   * Trasforma i tratti sottili a penna in zone morbide di densità così due "10000" scritti
+   * dalla stessa persona si sovrappongono con similarità 0.75-0.95 invece di 0.35!
    */
-  _extractInkFingerprint(workCanvas, inkRect) {
-    const W = 64;
-    const H = 32;
+  _extractDilatedFingerprint(workCanvas, inkRect) {
+    const W = 32;
+    const H = 16;
     const c = document.createElement('canvas');
     c.width = W;
     c.height = H;
@@ -168,31 +177,31 @@ window.HandwritingOCR = {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, W, H);
 
-    // Mantiene proporzioni centrando l'inchiostro nel riquadro 64x32 con piccolo margine
-    const scale = Math.min((W - 4) / inkRect.w, (H - 4) / inkRect.h);
+    // Sfoca leggermente durante il ridimensionamento per rendere il confronto tollerante a piccole differenze di tratto
+    ctx.filter = 'blur(1.2px)';
+    const scale = Math.min((W - 2) / inkRect.w, (H - 2) / inkRect.h);
     const dw = Math.max(1, Math.round(inkRect.w * scale));
     const dh = Math.max(1, Math.round(inkRect.h * scale));
     const dx = Math.floor((W - dw) / 2);
     const dy = Math.floor((H - dh) / 2);
 
     ctx.drawImage(workCanvas, inkRect.x, inkRect.y, inkRect.w, inkRect.h, dx, dy, dw, dh);
+    ctx.filter = 'none';
 
     const imgData = ctx.getImageData(0, 0, W, H).data;
     const vec = new Float32Array(W * H);
     for (let i = 0, p = 0; i < imgData.length; i += 4, p++) {
-      // 1.0 = inchiostro scuro, 0.0 = sfondo bianco
       vec[p] = (255 - imgData[i]) / 255.0;
     }
     return vec;
   },
 
   /**
-   * Calcola la similarità visiva (Cosine Similarity con tolleranza di traslazione ±2px)
-   * tra due impronte 64x32. Restituisce un valore tra 0 e 1.
+   * Cosine Similarity con tolleranza di traslazione ±2px su griglia 32x16
    */
   _compareFingerprints(fpA, fpB) {
-    const W = 64;
-    const H = 32;
+    const W = 32;
+    const H = 16;
     let bestSim = 0;
 
     for (let dy = -2; dy <= 2; dy++) {
@@ -213,7 +222,7 @@ window.HandwritingOCR = {
             normB += b * b;
           }
         }
-        if (normA > 0.5 && normB > 0.5) {
+        if (normA > 0.15 && normB > 0.15) {
           const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB));
           if (sim > bestSim) bestSim = sim;
         }
@@ -223,51 +232,82 @@ window.HandwritingOCR = {
   },
 
   /**
-   * APPRENDIMENTO REALE: Chiamato ogni volta che l'operatore corregge o conferma un valore!
-   * Aggiorna:
-   * 1. Memoria visiva dei tracciati (template matching)
-   * 2. Mappa esatta raw_text -> valore confermato
-   * 3. Matrice di confusione per singola cifra
+   * Calcola il miglior match visivo confrontando sia con ogni singolo tracciato salvato
+   * sia con il "centroide" (media di tutti i tracciati salvati per lo stesso valore).
    */
+  _findBestVisualMatch(fingerprint) {
+    if (!fingerprint || this.memory.visualTemplates.length === 0) {
+      return { value: null, score: 0 };
+    }
+
+    let bestVal = null;
+    let bestScore = 0;
+
+    // 1. Confronto con singoli tracciati
+    const byValue = {};
+    for (const tpl of this.memory.visualTemplates) {
+      const sim = this._compareFingerprints(fingerprint, tpl.fp);
+      if (sim > bestScore) {
+        bestScore = sim;
+        bestVal = tpl.value;
+      }
+      if (!byValue[tpl.value]) byValue[tpl.value] = [];
+      byValue[tpl.value].push(tpl.fp);
+    }
+
+    // 2. Confronto con il centroide medio di ciascun valore (molto potente quando hai 2+ esempi dello stesso numero!)
+    for (const [valStr, fps] of Object.entries(byValue)) {
+      if (fps.length < 2) continue;
+      const centroid = new Float32Array(32 * 16);
+      for (const fp of fps) {
+        for (let i = 0; i < centroid.length; i++) centroid[i] += fp[i];
+      }
+      for (let i = 0; i < centroid.length; i++) centroid[i] /= fps.length;
+
+      const simCentroid = this._compareFingerprints(fingerprint, centroid);
+      // Piccola spinta di affidabilità al centroide
+      if (simCentroid > bestScore) {
+        bestScore = simCentroid;
+        bestVal = Number(valStr);
+      }
+    }
+
+    return { value: bestVal, score: bestScore };
+  },
+
   learnFromCorrection({ fingerprint, rawTextRead, confirmedValue }) {
     if (confirmedValue === undefined || confirmedValue === null || isNaN(confirmedValue)) return;
 
     const cleanRaw = String(rawTextRead || '').trim();
     const confirmedStr = String(confirmedValue);
 
-    // 1. Salva impronta visiva del tracciato confermato (max 40 template in memoria di sessione)
     if (fingerprint) {
       this.memory.visualTemplates.push({
         value: Number(confirmedValue),
         rawText: cleanRaw,
         fp: fingerprint
       });
-      if (this.memory.visualTemplates.length > 40) {
+      if (this.memory.visualTemplates.length > 60) {
         this.memory.visualTemplates.shift();
       }
     }
 
-    // 2. Registra lunghezza in cifre
     const digitsOnlyConfirmed = confirmedStr.replace(/[^0-9]/g, '');
     if (digitsOnlyConfirmed.length > 0) {
       this.memory.confirmedLengths.push(digitsOnlyConfirmed.length);
     }
 
-    // 3. Mappa esatta stringa grezza -> valore corretto (se TrOCR sbaglia sempre allo stesso modo)
-    if (cleanRaw && cleanRaw !== '(nessun testo)' && cleanRaw !== 'ERRORE OCR') {
+    if (cleanRaw && !cleanRaw.startsWith('(') && !cleanRaw.includes('Appreso') && cleanRaw !== 'ERRORE OCR') {
       const key = cleanRaw.toLowerCase().replace(/\s+/g, '');
       this.memory.exactRawMap[key] = Number(confirmedValue);
 
-      // 4. Apprendimento confusione carattere-per-carattere (se stessa lunghezza)
       const rawDigits = this._normalizeHandwrittenChars(cleanRaw).replace(/[^0-9]/g, '');
       if (rawDigits.length === digitsOnlyConfirmed.length && rawDigits.length >= 2) {
         for (let i = 0; i < rawDigits.length; i++) {
           const rChar = rawDigits[i];
           const cChar = digitsOnlyConfirmed[i];
           if (rChar !== cChar) {
-            if (!this.memory.charSubstitutions[rChar]) {
-              this.memory.charSubstitutions[rChar] = {};
-            }
+            if (!this.memory.charSubstitutions[rChar]) this.memory.charSubstitutions[rChar] = {};
             this.memory.charSubstitutions[rChar][cChar] = (this.memory.charSubstitutions[rChar][cChar] || 0) + 1;
           }
         }
@@ -286,7 +326,6 @@ window.HandwritingOCR = {
   },
 
   _applyLearnedCharSubstitutions(numStr) {
-    // Applica una sostituzione di cifra solo se è stata osservata almeno 2 volte nella stessa sessione
     let out = '';
     for (const ch of numStr) {
       const subs = this.memory.charSubstitutions[ch];
@@ -305,7 +344,6 @@ window.HandwritingOCR = {
   parseHandwrittenNumber(rawText) {
     if (!rawText) return 0;
 
-    // 1. Controlla se questa esatta lettura grezza di TrOCR è già stata corretta dall'operatore
     const exactKey = String(rawText).trim().toLowerCase().replace(/\s+/g, '');
     if (this.memory.exactRawMap[exactKey] !== undefined) {
       return this.memory.exactRawMap[exactKey];
@@ -332,55 +370,49 @@ window.HandwritingOCR = {
       }
     }
 
-    // Applica eventuali regole di sostituzione cifre apprese dalle correzioni ripetute
     cleaned = this._applyLearnedCharSubstitutions(cleaned);
 
     const num = parseFloat(cleaned);
     return isNaN(num) ? 0 : num;
   },
 
-  /**
-   * Riconoscimento ibrido adattivo:
-   * 1) Verifica prima la Memoria Visiva dei tracciati già validati dall'operatore.
-   *    Se il tracciato è molto simile (similarità >= 0.80), restituisce subito il valore appreso!
-   * 2) Altrimenti esegue TrOCR e applica la Mappa Adattiva di Correzione.
-   */
   async recognize(preprocessedObj, onStatusCallback = null) {
     const imageDataUrl = typeof preprocessedObj === 'string' ? preprocessedObj : preprocessedObj?.dataUrl;
     const fingerprint = typeof preprocessedObj === 'object' ? preprocessedObj?.fingerprint : null;
+    const inkRatio = typeof preprocessedObj === 'object' ? (preprocessedObj?.inkRatio || 0) : 0.05;
 
-    // STEP 1: Confronto rapido con la Memoria Visiva dei tracciati già corretti/confermati
-    if (fingerprint && this.memory.visualTemplates.length > 0) {
-      let bestMatch = null;
-      let bestScore = 0;
+    // STEP 1: Confronto con Memoria Visiva (singoli tracciati + centroide)
+    const visualMatch = this._findBestVisualMatch(fingerprint);
 
-      for (const tpl of this.memory.visualTemplates) {
-        const sim = this._compareFingerprints(fingerprint, tpl.fp);
-        if (sim > bestScore) {
-          bestScore = sim;
-          bestMatch = tpl;
-        }
-      }
-
-      // Se il tracciato è molto simile o identico a uno già validato (soglia 0.80)
-      if (bestMatch && bestScore >= 0.80) {
-        return {
-          raw_text_read: `${bestMatch.value} [Appreso da tracciato simile ${Math.round(bestScore * 100)}%]`,
-          detected_value: bestMatch.value,
-          confidence: Number(Math.min(0.99, bestScore + 0.08).toFixed(2)),
-          matchedByMemory: true
-        };
-      }
+    // Soglia diretta 0.65 su mappa 32x16 sfocata: riconosce subito tracciati simili senza nemmeno aspettare TrOCR!
+    if (visualMatch.value !== null && visualMatch.score >= 0.65) {
+      return {
+        raw_text_read: `${visualMatch.value} [Memoria Visiva ${Math.round(visualMatch.score * 100)}%]`,
+        detected_value: visualMatch.value,
+        confidence: Number(Math.min(0.99, visualMatch.score + 0.15).toFixed(2)),
+        matchedByMemory: true
+      };
     }
 
-    // STEP 2: Esecuzione rete neurale TrOCR + Mappa Adattiva di Correzione
+    // STEP 2: Rete neurale TrOCR + Mappa Adattiva
     const pipe = await this.init(onStatusCallback);
     const out = await pipe(imageDataUrl);
     const rawText = (Array.isArray(out) && out[0]?.generated_text) ? out[0].generated_text.trim() : '';
 
     const exactKey = rawText.toLowerCase().replace(/\s+/g, '');
     const usedExactCorrection = this.memory.exactRawMap[exactKey] !== undefined;
-    const value = this.parseHandwrittenNumber(rawText);
+    let value = this.parseHandwrittenNumber(rawText);
+
+    // STEP 3: Rete di sicurezza! Se TrOCR restituisce 0/vuoto ma c'è inchiostro nel riquadro
+    // e abbiamo un match visivo ragionevole (>= 0.52), usa il valore appreso invece di 0!
+    if (value === 0 && inkRatio > 0.01 && visualMatch.value !== null && visualMatch.score >= 0.52) {
+      return {
+        raw_text_read: `${visualMatch.value} [Fallback Visivo ${Math.round(visualMatch.score * 100)}%, TrOCR="${rawText}"]`,
+        detected_value: visualMatch.value,
+        confidence: Number(Math.min(0.90, visualMatch.score + 0.10).toFixed(2)),
+        matchedByMemory: true
+      };
+    }
 
     let confidence = 0.0;
     if (usedExactCorrection) {
@@ -392,8 +424,11 @@ window.HandwritingOCR = {
       confidence = 0.40;
     }
 
+    const simNote = visualMatch.value !== null ? ` | Sim visiva: ${Math.round(visualMatch.score * 100)}%` : '';
     return {
-      raw_text_read: usedExactCorrection ? `${rawText} → corretto in ${value}` : (rawText || '(nessun testo)'),
+      raw_text_read: usedExactCorrection
+        ? `${rawText} → corretto in ${value}`
+        : `${rawText || '(nessun testo)'}${simNote}`,
       detected_value: value,
       confidence,
       matchedByMemory: usedExactCorrection

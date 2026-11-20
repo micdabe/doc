@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
       AppState.latestCalibratedBox = { ...newBox };
       document.getElementById('cal-coords-display').textContent =
         `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
-      const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 4, 'cal-crop-canvas');
+      const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 3, 'cal-crop-canvas');
       if (prep) AppState.pagesData[0].fingerprint = prep.fingerprint;
     },
     async (finalBox) => {
@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pageObj) {
         pageObj.bounding_box = newBox;
         AppState.latestCalibratedBox = { ...newBox };
-        const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 4, 'rev-crop-canvas');
+        const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 3, 'rev-crop-canvas');
         if (prep) pageObj.fingerprint = prep.fingerprint;
       }
     },
@@ -323,7 +323,7 @@ async function runTargetedOcrOnCalibrationBox(box) {
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
-  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'cal-crop-canvas');
+  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 3, 'cal-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
   const res = await ApiService.analyzePageImage(
@@ -363,7 +363,7 @@ async function runTargetedOcrOnReviewBox(box) {
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
-  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'rev-crop-canvas');
+  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 3, 'rev-crop-canvas');
 
   const selectedTypeId = document.getElementById('rev-type-select').value;
   const res = await ApiService.analyzePageImage(
@@ -492,7 +492,7 @@ async function processRemainingPages() {
   const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
   // Assicura di avere l'impronta visiva aggiornata della Pagina 1 prima di addestrare il motore!
-  const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 4, null);
+  const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 3, null);
   AppState.pagesData[0].fingerprint = prepPage1?.fingerprint || AppState.pagesData[0].fingerprint;
 
   AppState.pagesData[0].detected_type_id = confirmedTypeId;
@@ -541,7 +541,7 @@ async function processRemainingPages() {
     statusText.textContent = `Analisi adattiva Pagina ${p} di ${total} (con memoria visiva calligrafia attiva)...`;
 
     await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 5, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 3, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
@@ -640,7 +640,7 @@ async function loadReviewPage(index) {
 
   document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${pageData.detected_value}`;
   applyBoundingBox('rev-bbox', pageData.bounding_box);
-  const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 4, 'rev-crop-canvas');
+  const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 3, 'rev-crop-canvas');
   if (prep) pageData.fingerprint = prep.fingerprint;
   updateRunningSumDisplay();
 }
@@ -713,7 +713,7 @@ async function reapplyLearnedRulesToRemainingPages() {
 
     btn.textContent = `⏳ Ricalibrazione adattiva Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
     await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 5, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 3, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
