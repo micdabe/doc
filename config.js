@@ -1,9 +1,8 @@
 /**
- * UNICO FILE DI CONFIGURAZIONE SUPABASE
+ * UNICO FILE DI CONFIGURAZIONE SUPABASE (VERSIONE CLIENT-SIDE AI)
  * -------------------------------------------------------------------------
- * Inserisci qui i tuoi parametri Supabase.
- * Tutti gli altri file leggono esclusivamente da questo oggetto con priorità assoluta.
- * Nessuna modalità di simulazione o generatore casuale è presente nel sistema.
+ * Inserisci qui solo supabaseUrl e supabaseKey del tuo progetto Supabase.
+ * Il riconoscimento della scrittura a mano gira al 100% sulla CPU/GPU del client.
  */
 window.DOCSCANNER_CONFIG = {
   supabaseUrl: 'https://pqusarkwqpqzmyeysptc.supabase.co', // Es. 'https://xyzcompany.supabase.co'
