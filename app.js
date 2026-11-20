@@ -1,6 +1,5 @@
 /**
- * CONTROLLER PRINCIPALE (v12 — CLIENT-SIDE AI TrOCR)
- * Sfrutta window.HandwritingOCR (handwriting-ocr-engine.js) sulla CPU/GPU del client.
+ * CONTROLLER PRINCIPALE (v13 — APPRENDIMENTO REALE DAL TRACCIATO E DALLE CORREZIONI)
  */
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -23,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginHint = document.getElementById('login-db-hint');
   if (loginHint) {
     loginHint.textContent = isDbConnected
-      ? 'Connesso a Supabase — Motore AI Scrittura a Mano 100% Client-Side'
+      ? 'Connesso a Supabase — Motore AI Scrittura a Mano Adattivo 100% Client-Side'
       : 'Configura supabaseUrl e supabaseKey dentro config.js';
   }
 
@@ -44,7 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
       AppState.latestCalibratedBox = { ...newBox };
       document.getElementById('cal-coords-display').textContent =
         `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
-      window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 4, 'cal-crop-canvas');
+      const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 4, 'cal-crop-canvas');
+      if (prep) AppState.pagesData[0].fingerprint = prep.fingerprint;
     },
     async (finalBox) => {
       await runTargetedOcrOnCalibrationBox(finalBox);
@@ -59,7 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pageObj) {
         pageObj.bounding_box = newBox;
         AppState.latestCalibratedBox = { ...newBox };
-        window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 4, 'rev-crop-canvas');
+        const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 4, 'rev-crop-canvas');
+        if (prep) pageObj.fingerprint = prep.fingerprint;
       }
     },
     async (finalBox) => {
@@ -268,7 +269,6 @@ function setupScannerWorkflow() {
         AppState.pagesData[0].bounding_box = { ...selectedType.expected_box };
         AppState.latestCalibratedBox = { ...selectedType.expected_box };
         applyBoundingBox('cal-bbox', selectedType.expected_box);
-        window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), selectedType.expected_box, 4, 'cal-crop-canvas');
         await runTargetedOcrOnCalibrationBox(selectedType.expected_box);
       }
     }
@@ -319,15 +319,15 @@ function setupScannerWorkflow() {
 async function runTargetedOcrOnCalibrationBox(box) {
   if (!AppState.pagesData[0] || !box) return;
   const liveBadge = document.getElementById('cal-ocr-live-badge');
-  liveBadge.textContent = 'Lettura TrOCR...';
+  liveBadge.textContent = 'Lettura AI adattiva...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
-  const croppedDataUrl = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'cal-crop-canvas');
+  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'cal-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
   const res = await ApiService.analyzePageImage(
-    croppedDataUrl,
+    preprocessed,
     1,
     AppState.contentTypes,
     { primaryTypeId: selectedTypeId, referenceBox: box },
@@ -337,10 +337,12 @@ async function runTargetedOcrOnCalibrationBox(box) {
 
   showOcrErrorBanner('cal-ocr-error-banner', res.errorMsg);
 
+  AppState.pagesData[0].ai_initial_value = res.detected_value;
   AppState.pagesData[0].detected_value = res.detected_value;
   AppState.pagesData[0].raw_text_read = res.raw_text_read;
   AppState.pagesData[0].confidence = res.confidence;
   AppState.pagesData[0].bounding_box = { ...box };
+  AppState.pagesData[0].fingerprint = preprocessed?.fingerprint || null;
   AppState.latestCalibratedBox = { ...box };
 
   const matchedType = AppState.contentTypes.find(t => t.id === selectedTypeId);
@@ -357,15 +359,15 @@ async function runTargetedOcrOnReviewBox(box) {
   if (!pageObj || !box) return;
 
   const liveBadge = document.getElementById('rev-ocr-live-badge');
-  liveBadge.textContent = 'Lettura TrOCR...';
+  liveBadge.textContent = 'Lettura AI adattiva...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
-  const croppedDataUrl = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'rev-crop-canvas');
+  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 4, 'rev-crop-canvas');
 
   const selectedTypeId = document.getElementById('rev-type-select').value;
   const res = await ApiService.analyzePageImage(
-    croppedDataUrl,
+    preprocessed,
     pageObj.page_number,
     AppState.contentTypes,
     { primaryTypeId: selectedTypeId, referenceBox: box },
@@ -379,6 +381,7 @@ async function runTargetedOcrOnReviewBox(box) {
   pageObj.raw_text_read = res.raw_text_read;
   pageObj.confidence = res.confidence;
   pageObj.bounding_box = { ...box };
+  pageObj.fingerprint = preprocessed?.fingerprint || null;
   pageObj.box_moved_by_user = true;
   AppState.latestCalibratedBox = { ...box };
 
@@ -416,7 +419,6 @@ async function rotateCalibrationPage(deltaDegrees) {
   document.getElementById('cal-rot-meta').textContent = formatRotationLabel(newRot);
 
   await renderPdfPageToCanvas(1, 'cal-pdf-canvas', newRot);
-  window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), AppState.pagesData[0].bounding_box, 4, 'cal-crop-canvas');
   await runTargetedOcrOnCalibrationBox(AppState.pagesData[0].bounding_box);
 }
 
@@ -430,7 +432,6 @@ async function rotateReviewPage(deltaDegrees) {
   document.getElementById('rev-rot-meta').textContent = formatRotationLabel(newRot);
 
   await renderPdfPageToCanvas(pageObj.page_number, 'rev-pdf-canvas', newRot);
-  window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageObj.bounding_box, 4, 'rev-crop-canvas');
   await runTargetedOcrOnReviewBox(pageObj.bounding_box);
 }
 
@@ -440,7 +441,10 @@ async function handlePdfFileSelected(file) {
     return;
   }
 
+  // Azzera la memoria della calligrafia per il nuovo PDF
+  window.HandwritingOCR.resetSessionMemory();
   AppState.sessionCorrections = [];
+
   const arrayBuffer = await file.arrayBuffer();
   AppState.pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const totalPages = AppState.pdfDoc.numPages;
@@ -458,6 +462,7 @@ async function handlePdfFileSelected(file) {
     detected_value: 0,
     raw_text_read: '',
     bounding_box: { ...initialBox },
+    fingerprint: null,
     rotation: 0,
     confidence: 0,
     is_verified: false,
@@ -486,11 +491,22 @@ async function processRemainingPages() {
   const confirmedBox = { ...AppState.pagesData[0].bounding_box };
   const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
+  // Assicura di avere l'impronta visiva aggiornata della Pagina 1 prima di addestrare il motore!
+  const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 4, null);
+  AppState.pagesData[0].fingerprint = prepPage1?.fingerprint || AppState.pagesData[0].fingerprint;
+
   AppState.pagesData[0].detected_type_id = confirmedTypeId;
   AppState.pagesData[0].detected_value = confirmedValue;
   AppState.pagesData[0].is_verified = true;
   AppState.latestCalibratedTypeId = confirmedTypeId;
   AppState.latestCalibratedBox = { ...confirmedBox };
+
+  // ADDESTRA SUBITO IL MOTORE ADATTIVO CON LA PAGINA 1 (tracciato visivo + valore corretto)
+  window.HandwritingOCR.learnFromCorrection({
+    fingerprint: AppState.pagesData[0].fingerprint,
+    rawTextRead: AppState.pagesData[0].raw_text_read,
+    confirmedValue: confirmedValue
+  });
 
   const correctionRecord = {
     page: 1,
@@ -522,13 +538,13 @@ async function processRemainingPages() {
   for (let p = 2; p <= total; p++) {
     const pct = Math.round(((p - 1) / total) * 100);
     progressBar.style.width = `${pct}%`;
-    statusText.textContent = `Analisi Client AI (TrOCR) Pagina ${p} di ${total} nell'area (X:${confirmedBox.x}%, Y:${confirmedBox.y}%)...`;
+    statusText.textContent = `Analisi adattiva Pagina ${p} di ${total} (con memoria visiva calligrafia attiva)...`;
 
     await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-    const cropDataUrl = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 5, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 5, null);
 
     const res = await ApiService.analyzePageImage(
-      cropDataUrl,
+      prep,
       p,
       AppState.contentTypes,
       { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox },
@@ -542,10 +558,11 @@ async function processRemainingPages() {
       detected_value: res.detected_value,
       raw_text_read: res.raw_text_read,
       bounding_box: { ...confirmedBox },
+      fingerprint: prep?.fingerprint || null,
       rotation: inheritedRotation,
       confidence: res.confidence,
       is_verified: false,
-      notes: ''
+      notes: res.matchedByMemory ? 'Riconosciuto da memoria calligrafia' : ''
     };
   }
 
@@ -598,7 +615,8 @@ async function loadReviewPage(index) {
   document.getElementById('rev-inspector-page').textContent = pageData.page_number;
   document.getElementById('rev-rot-badge').textContent = `${rot}°`;
   document.getElementById('rev-rot-meta').textContent = formatRotationLabel(rot);
-  document.getElementById('rev-session-learn-badge').textContent = `${AppState.sessionCorrections.length} correzioni`;
+  document.getElementById('rev-session-learn-badge').textContent =
+    `${window.HandwritingOCR.memory.visualTemplates.length} tracciati appresi`;
 
   await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas', rot);
 
@@ -622,7 +640,8 @@ async function loadReviewPage(index) {
 
   document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${pageData.detected_value}`;
   applyBoundingBox('rev-bbox', pageData.bounding_box);
-  window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 4, 'rev-crop-canvas');
+  const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 4, 'rev-crop-canvas');
+  if (prep) pageData.fingerprint = prep.fingerprint;
   updateRunningSumDisplay();
 }
 
@@ -640,6 +659,15 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
   pageData.detected_value = newVal;
   pageData.notes = newNotes;
   if (markVerified) pageData.is_verified = true;
+
+  // APPRENDIMENTO SIA SU CORREZIONE ESPLICITA SIA SU CONFERMA IMPLICITA!
+  if (markVerified) {
+    window.HandwritingOCR.learnFromCorrection({
+      fingerprint: pageData.fingerprint,
+      rawTextRead: pageData.raw_text_read,
+      confirmedValue: newVal
+    });
+  }
 
   if (wasModified && markVerified) {
     AppState.latestCalibratedTypeId = newTypeId;
@@ -663,7 +691,7 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
     const remainingUnverified = AppState.pagesData.slice(AppState.currentReviewIndex + 1).filter(p => !p.is_verified);
     if (remainingUnverified.length > 0) {
       const reapplyBtn = document.getElementById('btn-rev-reapply-remaining');
-      reapplyBtn.textContent = `↻ Rianalizza le ${remainingUnverified.length} Pagine Successive nella Nuova Posizione`;
+      reapplyBtn.textContent = `🧠 Rianalizza le ${remainingUnverified.length} Pagine Successive con i Tracciati Appresi`;
       reapplyBtn.classList.remove('hidden');
     }
   }
@@ -683,12 +711,12 @@ async function reapplyLearnedRulesToRemainingPages() {
     const p = AppState.pagesData[i];
     if (p.is_verified) continue;
 
-    btn.textContent = `⏳ Ricalibrazione TrOCR Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
+    btn.textContent = `⏳ Ricalibrazione adattiva Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
     await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
-    const cropDataUrl = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 5, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 5, null);
 
     const res = await ApiService.analyzePageImage(
-      cropDataUrl,
+      prep,
       p.page_number,
       AppState.contentTypes,
       { primaryTypeId: targetTypeId, referenceBox: targetBox },
@@ -700,13 +728,14 @@ async function reapplyLearnedRulesToRemainingPages() {
     p.detected_value = res.detected_value;
     p.raw_text_read = res.raw_text_read;
     p.bounding_box = { ...targetBox };
+    p.fingerprint = prep?.fingerprint || null;
     p.confidence = res.confidence;
   }
 
   btn.disabled = false;
   btn.classList.add('hidden');
   updateRunningSumDisplay();
-  alert('Pagine successive rianalizzate nella nuova posizione!');
+  alert('Pagine successive rianalizzate applicando i tracciati e le correzioni apprese!');
   if (AppState.currentReviewIndex < AppState.pagesData.length - 1) {
     loadReviewPage(AppState.currentReviewIndex + 1);
   }
@@ -821,6 +850,7 @@ function resetScanner() {
   AppState.pdfDoc = null;
   AppState.pagesData = [];
   AppState.sessionCorrections = [];
+  window.HandwritingOCR.resetSessionMemory();
   setScannerStep(1);
 }
 
@@ -905,7 +935,7 @@ function updateLearnedBadge(badgeId, typeObj) {
   const el = document.getElementById(badgeId);
   if (!el) return;
   const count = Array.isArray(typeObj?.learned_examples) ? typeObj.learned_examples.length : 0;
-  el.textContent = `${count} esempi appresi nel DB`;
+  el.textContent = `${count} esempi nel DB`;
 }
 
 function populateTypeSelects() {

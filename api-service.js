@@ -1,6 +1,5 @@
 /**
- * API SERVICE LAYER (SUPABASE DB + HANDWRITING OCR CLIENT-SIDE)
- * Zero costi per chiamata, zero limiti di quota, 100% statico sul web.
+ * API SERVICE LAYER (SUPABASE DB + HANDWRITING OCR ADATTIVO CLIENT-SIDE)
  */
 
 const ApiService = {
@@ -203,8 +202,7 @@ const ApiService = {
     return data || [];
   },
 
-  // Chiama il nuovo motore neurale client-side HandwritingOCR (TrOCR ONNX)
-  async analyzePageImage(croppedDataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null) {
+  async analyzePageImage(preprocessedObj, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null) {
     const defaultTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
     const refBox = targetBox
       || (priorContext && priorContext.referenceBox)
@@ -215,11 +213,11 @@ const ApiService = {
       if (!window.HandwritingOCR) {
         throw new Error('Modulo handwriting-ocr-engine.js non caricato.');
       }
-      if (!croppedDataUrl) {
+      if (!preprocessedObj) {
         throw new Error('Nessuna area immagine ritagliata disponibile.');
       }
 
-      const res = await window.HandwritingOCR.recognize(croppedDataUrl, onStatusCallback);
+      const res = await window.HandwritingOCR.recognize(preprocessedObj, onStatusCallback);
 
       return {
         detected_type_id: defaultTypeId,
@@ -227,6 +225,7 @@ const ApiService = {
         raw_text_read: res.raw_text_read,
         bounding_box: { ...refBox },
         confidence: res.confidence,
+        matchedByMemory: res.matchedByMemory || false,
         errorMsg: null
       };
     } catch (err) {
@@ -237,6 +236,7 @@ const ApiService = {
         raw_text_read: 'ERRORE OCR',
         bounding_box: { ...refBox },
         confidence: 0,
+        matchedByMemory: false,
         errorMsg: err.message || 'Errore durante il riconoscimento locale'
       };
     }
