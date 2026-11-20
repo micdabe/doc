@@ -203,10 +203,8 @@ const ApiService = {
   },
 
   async analyzePageImage(preprocessedObj, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null, fullCanvas = null) {
-    const fallbackTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
     const refBox = targetBox
       || (priorContext && priorContext.referenceBox)
-      || (availableTypes && availableTypes.find(t => t.id === fallbackTypeId)?.expected_box)
       || { x: 55, y: 65, w: 25, h: 8 };
 
     try {
@@ -217,36 +215,49 @@ const ApiService = {
         throw new Error('Nessuna area immagine ritagliata disponibile.');
       }
 
-      // 1. Classificazione automatica Tipologia dal testo stampato (es. "drinking water")
-      let detectedTypeId = fallbackTypeId;
+      // 1. Classificazione automatica Tipologia dal testo stampato (ZERO FALLBACK)
+      let detectedTypeId = null;
       let typeMatchNote = '';
+      let pageText = '';
+      const errors = [];
+
       if (fullCanvas && availableTypes && availableTypes.length > 0) {
         const cls = await window.HandwritingOCR.classifyPageType(fullCanvas, availableTypes, onStatusCallback);
+        pageText = cls.pageText || '';
         if (cls.typeId) {
           detectedTypeId = cls.typeId;
-          typeMatchNote = ` | Tipo: "${cls.matchedPhrase}"`;
+          typeMatchNote = `Tipo riconosciuto: "${cls.matchedPhrase}" (score ${cls.score})`;
+        } else {
+          errors.push('Tipologia NON riconosciuta dal testo stampato (assegnazione manuale richiesta).');
         }
+      } else {
+        errors.push('Impossibile leggere il testo stampato della pagina.');
       }
 
-      // 2. Lettura numero scritto a mano cifra-per-cifra (0-9)
+      // 2. Lettura numero (ZERO FALLBACK: null se non leggibile)
       const res = await window.HandwritingOCR.recognizeNumber(preprocessedObj, onStatusCallback);
+      if (res.detected_value === null) {
+        errors.push(res.valueError || 'Valore numerico NON riconosciuto (inserimento manuale richiesto).');
+      }
 
       return {
         detected_type_id: detectedTypeId,
         detected_value: res.detected_value,
-        raw_text_read: `${res.raw_text_read}${typeMatchNote}`,
-        bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...refBox },
+        raw_text_read: typeMatchNote ? `${res.raw_text_read} | ${typeMatchNote}` : res.raw_text_read,
+        pageText,
+        bounding_box: { ...refBox },
         confidence: res.confidence,
-        matchedByMemory: res.matchedByMemory || false,
-        errorMsg: null
+        matchedByMemory: false,
+        errorMsg: errors.length > 0 ? errors.join(' ') : null
       };
     } catch (err) {
-      console.error(`Errore HandwritingOCR Pagina ${pageNumber}:`, err);
+      console.error(`Errore OCR Pagina ${pageNumber}:`, err);
       return {
-        detected_type_id: defaultTypeId,
-        detected_value: 0,
+        detected_type_id: null,
+        detected_value: null,
         raw_text_read: 'ERRORE OCR',
-        bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...refBox },
+        pageText: '',
+        bounding_box: { ...refBox },
         confidence: 0,
         matchedByMemory: false,
         errorMsg: err.message || 'Errore durante il riconoscimento locale'

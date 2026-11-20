@@ -279,6 +279,11 @@ function setupScannerWorkflow() {
   document.getElementById('btn-confirm-page1').addEventListener('click', processRemainingPages);
 
   document.getElementById('btn-decision-yes').addEventListener('click', async () => {
+    const incomplete = AppState.pagesData.filter(p => !p.detected_type_id || p.detected_value === null || p.detected_value === undefined);
+    if (incomplete.length > 0) {
+      alert(`BLOCCATO: Ci sono ${incomplete.length} pagine con Tipologia o Valore NON riconosciuti. Clicca su "NO — Rivedi Pagina per Pagina" per completarli manualmente.`);
+      return;
+    }
     await ApiService.updateBatch(AppState.currentBatch.id, {
       status: 'completed',
       completed_at: new Date().toISOString()
@@ -298,7 +303,8 @@ function setupScannerWorkflow() {
   document.getElementById('btn-rev-next').addEventListener('click', () => navigateReview(1));
 
   document.getElementById('btn-rev-accept-page').addEventListener('click', async () => {
-    await saveAndLearnCurrentReviewPage(true);
+    const ok = await saveAndLearnCurrentReviewPage(true);
+    if (ok === false) return;
     if (AppState.currentReviewIndex < AppState.pagesData.length - 1) {
       navigateReview(1, true);
     } else {
@@ -338,20 +344,24 @@ async function runTargetedOcrOnCalibrationBox(box) {
 
   showOcrErrorBanner('cal-ocr-error-banner', res.errorMsg);
 
-  AppState.pagesData[0].detected_type_id = res.detected_type_id || selectedTypeId;
-  document.getElementById('cal-type-select').value = AppState.pagesData[0].detected_type_id;
+  AppState.pagesData[0].detected_type_id = res.detected_type_id;
+  document.getElementById('cal-type-select').value = res.detected_type_id || '';
   AppState.pagesData[0].ai_initial_value = res.detected_value;
   AppState.pagesData[0].detected_value = res.detected_value;
   AppState.pagesData[0].raw_text_read = res.raw_text_read;
+  AppState.pagesData[0].pageText = res.pageText || '';
+  AppState.pagesData[0].errorMsg = res.errorMsg || null;
   AppState.pagesData[0].confidence = res.confidence;
   AppState.pagesData[0].bounding_box = { ...box };
   AppState.pagesData[0].digitBlobs = preprocessed?.digitBlobs || [];
   AppState.latestCalibratedBox = { ...box };
 
-  const matchedType = AppState.contentTypes.find(t => t.id === selectedTypeId);
-  document.getElementById('cal-value-input').value = res.detected_value;
-  document.getElementById('cal-confidence').textContent = `${Math.round(res.confidence * 100)}% (Testo letto: "${res.raw_text_read}")`;
-  document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${res.detected_value}`;
+  const matchedType = AppState.contentTypes.find(t => t.id === res.detected_type_id);
+  document.getElementById('cal-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
+  document.getElementById('cal-value-input').value = res.detected_value !== null ? res.detected_value : '';
+  document.getElementById('cal-confidence').textContent = `${Math.round(res.confidence * 100)}% (${res.raw_text_read})`;
+  document.getElementById('cal-page-text-preview').textContent = res.pageText ? res.pageText.slice(0, 400) : '(nessun testo stampato letto)';
+  document.getElementById('cal-bbox-label').textContent = `${matchedType?.target_field_label || 'Valore'}: ${res.detected_value !== null ? res.detected_value : 'NON LETTO'}`;
 
   liveBadge.textContent = res.errorMsg ? '⚠ Errore' : '✓ Letto';
   setTimeout(() => liveBadge.classList.add('hidden'), 1500);
@@ -381,18 +391,23 @@ async function runTargetedOcrOnReviewBox(box) {
 
   showOcrErrorBanner('rev-ocr-error-banner', res.errorMsg);
 
+  pageObj.detected_type_id = res.detected_type_id;
+  document.getElementById('rev-type-select').value = res.detected_type_id || '';
   pageObj.detected_value = res.detected_value;
   pageObj.raw_text_read = res.raw_text_read;
+  pageObj.pageText = res.pageText || '';
+  pageObj.errorMsg = res.errorMsg || null;
   pageObj.confidence = res.confidence;
   pageObj.bounding_box = { ...box };
   pageObj.digitBlobs = preprocessed?.digitBlobs || [];
   pageObj.box_moved_by_user = true;
   AppState.latestCalibratedBox = { ...box };
 
-  const matchedType = AppState.contentTypes.find(t => t.id === selectedTypeId);
-  document.getElementById('rev-value-input').value = res.detected_value;
-  document.getElementById('rev-confidence').textContent = `${Math.round(res.confidence * 100)}% (Testo letto: "${res.raw_text_read}")`;
-  document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${res.detected_value}`;
+  const matchedType = AppState.contentTypes.find(t => t.id === res.detected_type_id);
+  document.getElementById('rev-value-input').value = res.detected_value !== null ? res.detected_value : '';
+  document.getElementById('rev-confidence').textContent = `${Math.round(res.confidence * 100)}% (${res.raw_text_read})`;
+  document.getElementById('rev-page-text-preview').textContent = res.pageText ? res.pageText.slice(0, 400) : '(nessun testo stampato letto)';
+  document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${res.detected_value !== null ? res.detected_value : 'NON LETTO'}`;
   updateRunningSumDisplay();
 
   liveBadge.textContent = res.errorMsg ? '⚠ Errore' : '✓ Letto';
@@ -491,7 +506,16 @@ async function handlePdfFileSelected(file) {
 
 async function processRemainingPages() {
   const confirmedTypeId = document.getElementById('cal-type-select').value;
-  const confirmedValue = parseFloat(document.getElementById('cal-value-input').value) || 0;
+  const rawValStr = document.getElementById('cal-value-input').value.trim();
+  if (!confirmedTypeId) {
+    alert('ERRORE: Devi selezionare una Tipologia di Contenuto per la Pagina 1 prima di procedere.');
+    return;
+  }
+  if (rawValStr === '' || isNaN(parseFloat(rawValStr))) {
+    alert('ERRORE: Devi inserire il Valore Numerico della Pagina 1 prima di procedere.');
+    return;
+  }
+  const confirmedValue = parseFloat(rawValStr);
   const confirmedBox = { ...AppState.pagesData[0].bounding_box };
   const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
@@ -543,7 +567,7 @@ async function processRemainingPages() {
     statusText.textContent = `Analisi adattiva Pagina ${p} di ${total} (con memoria visiva calligrafia attiva)...`;
 
     await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-    const prep = window.HandwritingOCR.locateAndPreprocessInSearchWindow(offscreenCanvas, confirmedBox, 7, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 1, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
@@ -561,6 +585,8 @@ async function processRemainingPages() {
       ai_initial_value: res.detected_value,
       detected_value: res.detected_value,
       raw_text_read: res.raw_text_read,
+      pageText: res.pageText || '',
+      errorMsg: res.errorMsg || null,
       bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...confirmedBox },
       digitBlobs: prep?.digitBlobs || [],
       rotation: inheritedRotation,
@@ -598,7 +624,7 @@ function renderDecisionSummary() {
     tbody.appendChild(tr);
   });
 
-  const lowConfPages = AppState.pagesData.filter(p => !p.is_verified && p.confidence < 0.85).length;
+  const lowConfPages = AppState.pagesData.filter(p => !p.is_verified && (!p.detected_type_id || p.detected_value === null || p.confidence < 0.85)).length;
   const alertBox = document.getElementById('dec-low-conf-alert');
   if (lowConfPages > 0) {
     document.getElementById('dec-low-conf-count').textContent = lowConfPages;
@@ -625,13 +651,15 @@ async function loadReviewPage(index) {
   await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas', rot);
 
   const typeSelect = document.getElementById('rev-type-select');
-  typeSelect.value = pageData.detected_type_id;
+  typeSelect.value = pageData.detected_type_id || '';
 
   const matchedType = AppState.contentTypes.find(t => t.id === pageData.detected_type_id);
   document.getElementById('rev-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
-  document.getElementById('rev-value-input').value = pageData.detected_value;
+  document.getElementById('rev-value-input').value = pageData.detected_value !== null && pageData.detected_value !== undefined ? pageData.detected_value : '';
   document.getElementById('rev-notes-input').value = pageData.notes || '';
-  document.getElementById('rev-confidence').textContent = `${Math.round(pageData.confidence * 100)}% (Testo letto: "${pageData.raw_text_read || 'nessuno'}")`;
+  document.getElementById('rev-confidence').textContent = `${Math.round(pageData.confidence * 100)}% (${pageData.raw_text_read || 'nessuno'})`;
+  document.getElementById('rev-page-text-preview').textContent = pageData.pageText ? pageData.pageText.slice(0, 400) : '(nessun testo stampato letto)';
+  showOcrErrorBanner('rev-ocr-error-banner', pageData.errorMsg || (!pageData.detected_type_id || pageData.detected_value === null ? 'Tipologia o Valore non riconosciuti: inseriscili manualmente.' : null));
 
   const badge = document.getElementById('rev-status-badge');
   if (pageData.is_verified) {
@@ -654,8 +682,15 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
   if (!pageData) return;
 
   const newTypeId = document.getElementById('rev-type-select').value;
-  const newVal = parseFloat(document.getElementById('rev-value-input').value) || 0;
+  const rawRevVal = document.getElementById('rev-value-input').value.trim();
   const newNotes = document.getElementById('rev-notes-input').value.trim();
+
+  if (markVerified && (!newTypeId || rawRevVal === '' || isNaN(parseFloat(rawRevVal)))) {
+    alert('ERRORE: Seleziona la Tipologia e inserisci un Valore Numerico valido prima di confermare questa pagina.');
+    return false;
+  }
+  const newVal = rawRevVal !== '' && !isNaN(parseFloat(rawRevVal)) ? parseFloat(rawRevVal) : null;
+  if (newTypeId && newVal !== null) pageData.errorMsg = null;
 
   const wasModified = (newVal !== pageData.ai_initial_value) || pageData.box_moved_by_user || (newTypeId !== pageData.detected_type_id);
 
@@ -717,7 +752,7 @@ async function reapplyLearnedRulesToRemainingPages() {
 
     btn.textContent = `⏳ Ricalibrazione adattiva Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
     await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
-    const prep = window.HandwritingOCR.locateAndPreprocessInSearchWindow(offscreenCanvas, targetBox, 7, null);
+    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 1, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
@@ -765,7 +800,7 @@ function navigateReview(direction, skipSave = false) {
 }
 
 function updateRunningSumDisplay() {
-  const total = AppState.pagesData.reduce((acc, p) => acc + (Number(p.detected_value) || 0), 0);
+  const total = AppState.pagesData.reduce((acc, p) => acc + (p.detected_value !== null && p.detected_value !== undefined ? Number(p.detected_value) : 0), 0);
   document.getElementById('rev-running-sum').textContent = total.toFixed(2);
 }
 
@@ -830,7 +865,7 @@ function calculateTotalsByType() {
       map[t.id] = { ...t, count: 0, sum: 0 };
     }
     map[t.id].count += 1;
-    map[t.id].sum += Number(p.detected_value) || 0;
+    if (p.detected_value !== null && p.detected_value !== undefined) map[t.id].sum += Number(p.detected_value);
   });
   return Object.values(map);
 }
@@ -948,7 +983,7 @@ function populateTypeSelects() {
   selects.forEach(sel => {
     if (!sel) return;
     const currentVal = sel.value;
-    sel.innerHTML = '';
+    sel.innerHTML = '<option value="">-- SELEZIONA TIPOLOGIA (NON RICONOSCIUTA) --</option>';
     AppState.contentTypes.forEach(t => {
       const opt = document.createElement('option');
       opt.value = t.id;
