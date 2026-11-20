@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 
@@ -31,7 +32,7 @@
     <!-- Barra Superiore -->
     <header class="topbar">
       <div class="brand">
-        <span class="brand-badge">CLIENT AI (TrOCR)</span>
+        <span class="brand-badge">DOPPIO MOTORE CLIENT</span>
         <h1>Scansione Certificati & Moduli</h1>
       </div>
       <nav class="nav-tabs">
@@ -66,7 +67,7 @@
         <div class="upload-dropzone" id="dropzone">
           <div class="upload-icon">📄</div>
           <h3>Trascina qui il file PDF con i moduli compilati a mano</h3>
-          <p>Motore neurale TrOCR eseguito 100% sul tuo browser (zero costi, zero limiti di pagine)</p>
+          <p>Motore neurale Motore OCR Locale eseguito 100% sul tuo browser (zero costi, zero limiti di pagine)</p>
           <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
           <button class="btn btn-primary" onclick="document.getElementById('pdf-file-input').click()">Seleziona File PDF</button>
         </div>
@@ -88,7 +89,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per inquadrare il numero scritto a mano: la rete neurale TrOCR lo leggerà subito sul tuo PC e applicherà questa posizione alle pagine successive.</span>
+              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per inquadrare il numero scritto a mano: la rete neurale Motore OCR Locale lo leggerà subito sul tuo PC e applicherà questa posizione alle pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -109,7 +110,7 @@
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Ritaglio Pulito Inviato a TrOCR (Client AI)</span>
+                <span>🔍 Ritaglio Pulito Inviato a Motore OCR Locale (Client AI)</span>
                 <small id="cal-learned-count-badge" class="learned-badge">0 esempi appresi</small>
               </div>
               <canvas id="cal-crop-canvas" class="crop-canvas"></canvas>
@@ -148,7 +149,7 @@
       <section id="step-processing" class="step-panel hidden">
         <div class="processing-card">
           <div class="spinner"></div>
-          <h3>Elaborazione Client AI (TrOCR) in corso...</h3>
+          <h3>Elaborazione Client AI (Motore OCR Locale) in corso...</h3>
           <p id="proc-status-text">Avvio analisi...</p>
           <div class="progress-bar-track">
             <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
@@ -228,7 +229,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 Trascina sul foglio per riposizionare il riquadro: TrOCR rileggerà subito il numero scritto a mano.</span>
+              <span>🎯 Trascina sul foglio per riposizionare il riquadro: Motore OCR Locale rileggerà subito il numero scritto a mano.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -249,7 +250,7 @@
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Ritaglio Pulito Inviato a TrOCR (Client AI)</span>
+                <span>🔍 Ritaglio Pulito Inviato a Motore OCR Locale (Client AI)</span>
                 <small id="rev-session-learn-badge" class="learned-badge">0 correzioni</small>
               </div>
               <canvas id="rev-crop-canvas" class="crop-canvas"></canvas>

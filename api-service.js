@@ -202,11 +202,11 @@ const ApiService = {
     return data || [];
   },
 
-  async analyzePageImage(preprocessedObj, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null) {
-    const defaultTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
+  async analyzePageImage(preprocessedObj, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null, fullCanvas = null) {
+    const fallbackTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
     const refBox = targetBox
       || (priorContext && priorContext.referenceBox)
-      || (availableTypes && availableTypes.find(t => t.id === defaultTypeId)?.expected_box)
+      || (availableTypes && availableTypes.find(t => t.id === fallbackTypeId)?.expected_box)
       || { x: 55, y: 65, w: 25, h: 8 };
 
     try {
@@ -217,12 +217,24 @@ const ApiService = {
         throw new Error('Nessuna area immagine ritagliata disponibile.');
       }
 
-      const res = await window.HandwritingOCR.recognize(preprocessedObj, onStatusCallback);
+      // 1. Classificazione automatica Tipologia dal testo stampato (es. "drinking water")
+      let detectedTypeId = fallbackTypeId;
+      let typeMatchNote = '';
+      if (fullCanvas && availableTypes && availableTypes.length > 0) {
+        const cls = await window.HandwritingOCR.classifyPageType(fullCanvas, availableTypes, onStatusCallback);
+        if (cls.typeId) {
+          detectedTypeId = cls.typeId;
+          typeMatchNote = ` | Tipo: "${cls.matchedPhrase}"`;
+        }
+      }
+
+      // 2. Lettura numero scritto a mano cifra-per-cifra (0-9)
+      const res = await window.HandwritingOCR.recognizeNumber(preprocessedObj, onStatusCallback);
 
       return {
-        detected_type_id: defaultTypeId,
+        detected_type_id: detectedTypeId,
         detected_value: res.detected_value,
-        raw_text_read: res.raw_text_read,
+        raw_text_read: `${res.raw_text_read}${typeMatchNote}`,
         bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...refBox },
         confidence: res.confidence,
         matchedByMemory: res.matchedByMemory || false,

@@ -332,17 +332,20 @@ async function runTargetedOcrOnCalibrationBox(box) {
     AppState.contentTypes,
     { primaryTypeId: selectedTypeId, referenceBox: box },
     box,
-    (statusMsg) => { liveBadge.textContent = statusMsg; }
+    (statusMsg) => { liveBadge.textContent = statusMsg; },
+    fullCanvas
   );
 
   showOcrErrorBanner('cal-ocr-error-banner', res.errorMsg);
 
+  AppState.pagesData[0].detected_type_id = res.detected_type_id || selectedTypeId;
+  document.getElementById('cal-type-select').value = AppState.pagesData[0].detected_type_id;
   AppState.pagesData[0].ai_initial_value = res.detected_value;
   AppState.pagesData[0].detected_value = res.detected_value;
   AppState.pagesData[0].raw_text_read = res.raw_text_read;
   AppState.pagesData[0].confidence = res.confidence;
   AppState.pagesData[0].bounding_box = { ...box };
-  AppState.pagesData[0].fingerprint = preprocessed?.fingerprint || null;
+  AppState.pagesData[0].digitBlobs = preprocessed?.digitBlobs || [];
   AppState.latestCalibratedBox = { ...box };
 
   const matchedType = AppState.contentTypes.find(t => t.id === selectedTypeId);
@@ -372,7 +375,8 @@ async function runTargetedOcrOnReviewBox(box) {
     AppState.contentTypes,
     { primaryTypeId: selectedTypeId, referenceBox: box },
     box,
-    (statusMsg) => { liveBadge.textContent = statusMsg; }
+    (statusMsg) => { liveBadge.textContent = statusMsg; },
+    fullCanvas
   );
 
   showOcrErrorBanner('rev-ocr-error-banner', res.errorMsg);
@@ -381,7 +385,7 @@ async function runTargetedOcrOnReviewBox(box) {
   pageObj.raw_text_read = res.raw_text_read;
   pageObj.confidence = res.confidence;
   pageObj.bounding_box = { ...box };
-  pageObj.fingerprint = preprocessed?.fingerprint || null;
+  pageObj.digitBlobs = preprocessed?.digitBlobs || [];
   pageObj.box_moved_by_user = true;
   AppState.latestCalibratedBox = { ...box };
 
@@ -491,9 +495,8 @@ async function processRemainingPages() {
   const confirmedBox = { ...AppState.pagesData[0].bounding_box };
   const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
-  // Assicura di avere l'impronta visiva aggiornata della Pagina 1 prima di addestrare il motore!
-  const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 3, null);
-  AppState.pagesData[0].fingerprint = prepPage1?.fingerprint || AppState.pagesData[0].fingerprint;
+  const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 2, null);
+  AppState.pagesData[0].digitBlobs = prepPage1?.digitBlobs || AppState.pagesData[0].digitBlobs || [];
 
   AppState.pagesData[0].detected_type_id = confirmedTypeId;
   AppState.pagesData[0].detected_value = confirmedValue;
@@ -501,10 +504,9 @@ async function processRemainingPages() {
   AppState.latestCalibratedTypeId = confirmedTypeId;
   AppState.latestCalibratedBox = { ...confirmedBox };
 
-  // ADDESTRA SUBITO IL MOTORE ADATTIVO CON LA PAGINA 1 (tracciato visivo + valore corretto)
+  // ADDESTRA SUBITO IL MOTORE CIFRA-PER-CIFRA CON LA PAGINA 1
   window.HandwritingOCR.learnFromCorrection({
-    fingerprint: AppState.pagesData[0].fingerprint,
-    rawTextRead: AppState.pagesData[0].raw_text_read,
+    digitBlobs: AppState.pagesData[0].digitBlobs,
     confirmedValue: confirmedValue
   });
 
@@ -548,7 +550,9 @@ async function processRemainingPages() {
       p,
       AppState.contentTypes,
       { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox },
-      prep?.refinedBox || confirmedBox
+      prep?.refinedBox || confirmedBox,
+      null,
+      offscreenCanvas
     );
 
     AppState.pagesData[p - 1] = {
@@ -558,7 +562,7 @@ async function processRemainingPages() {
       detected_value: res.detected_value,
       raw_text_read: res.raw_text_read,
       bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...confirmedBox },
-      fingerprint: prep?.fingerprint || null,
+      digitBlobs: prep?.digitBlobs || [],
       rotation: inheritedRotation,
       confidence: res.confidence,
       is_verified: false,
@@ -616,7 +620,7 @@ async function loadReviewPage(index) {
   document.getElementById('rev-rot-badge').textContent = `${rot}°`;
   document.getElementById('rev-rot-meta').textContent = formatRotationLabel(rot);
   document.getElementById('rev-session-learn-badge').textContent =
-    `${window.HandwritingOCR.memory.visualTemplates.length} tracciati appresi`;
+    `${Object.keys(window.HandwritingOCR.memory.digitTemplates).length} cifre apprese`;
 
   await renderPdfPageToCanvas(pageData.page_number, 'rev-pdf-canvas', rot);
 
@@ -641,7 +645,7 @@ async function loadReviewPage(index) {
   document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${pageData.detected_value}`;
   applyBoundingBox('rev-bbox', pageData.bounding_box);
   const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 3, 'rev-crop-canvas');
-  if (prep) pageData.fingerprint = prep.fingerprint;
+  if (prep) pageData.digitBlobs = prep.digitBlobs;
   updateRunningSumDisplay();
 }
 
@@ -663,8 +667,7 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
   // APPRENDIMENTO SIA SU CORREZIONE ESPLICITA SIA SU CONFERMA IMPLICITA!
   if (markVerified) {
     window.HandwritingOCR.learnFromCorrection({
-      fingerprint: pageData.fingerprint,
-      rawTextRead: pageData.raw_text_read,
+      digitBlobs: pageData.digitBlobs,
       confirmedValue: newVal
     });
   }
@@ -721,7 +724,9 @@ async function reapplyLearnedRulesToRemainingPages() {
       p.page_number,
       AppState.contentTypes,
       { primaryTypeId: targetTypeId, referenceBox: targetBox },
-      prep?.refinedBox || targetBox
+      prep?.refinedBox || targetBox,
+      null,
+      offscreenCanvas
     );
 
     p.detected_type_id = res.detected_type_id;
@@ -729,7 +734,7 @@ async function reapplyLearnedRulesToRemainingPages() {
     p.detected_value = res.detected_value;
     p.raw_text_read = res.raw_text_read;
     p.bounding_box = res.bounding_box ? { ...res.bounding_box } : { ...targetBox };
-    p.fingerprint = prep?.fingerprint || null;
+    p.digitBlobs = prep?.digitBlobs || [];
     p.confidence = res.confidence;
   }
 
