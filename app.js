@@ -541,14 +541,14 @@ async function processRemainingPages() {
     statusText.textContent = `Analisi adattiva Pagina ${p} di ${total} (con memoria visiva calligrafia attiva)...`;
 
     await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 3, null);
+    const prep = window.HandwritingOCR.locateAndPreprocessInSearchWindow(offscreenCanvas, confirmedBox, 7, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
       p,
       AppState.contentTypes,
       { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox },
-      confirmedBox
+      prep?.refinedBox || confirmedBox
     );
 
     AppState.pagesData[p - 1] = {
@@ -557,7 +557,7 @@ async function processRemainingPages() {
       ai_initial_value: res.detected_value,
       detected_value: res.detected_value,
       raw_text_read: res.raw_text_read,
-      bounding_box: { ...confirmedBox },
+      bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...confirmedBox },
       fingerprint: prep?.fingerprint || null,
       rotation: inheritedRotation,
       confidence: res.confidence,
@@ -688,7 +688,7 @@ async function saveAndLearnCurrentReviewPage(markVerified = true) {
       ApiService.recordHumanCorrection(typeObj, correctionRecord).catch(() => {});
     }
 
-    const remainingUnverified = AppState.pagesData.slice(AppState.currentReviewIndex + 1).filter(p => !p.is_verified);
+    const remainingUnverified = AppState.pagesData.slice(AppState.currentReviewIndex).filter(p => !p.is_verified);
     if (remainingUnverified.length > 0) {
       const reapplyBtn = document.getElementById('btn-rev-reapply-remaining');
       reapplyBtn.textContent = `🧠 Rianalizza le ${remainingUnverified.length} Pagine Successive con i Tracciati Appresi`;
@@ -707,27 +707,28 @@ async function reapplyLearnedRulesToRemainingPages() {
   const targetTypeId = AppState.latestCalibratedTypeId || AppState.pagesData[AppState.currentReviewIndex].detected_type_id;
   const targetBox = AppState.latestCalibratedBox || AppState.pagesData[AppState.currentReviewIndex].bounding_box;
 
-  for (let i = AppState.currentReviewIndex + 1; i < AppState.pagesData.length; i++) {
+  // Parte dalla pagina CORRENTE (se non ancora verificata) fino all'ultima pagina!
+  for (let i = AppState.currentReviewIndex; i < AppState.pagesData.length; i++) {
     const p = AppState.pagesData[i];
     if (p.is_verified) continue;
 
     btn.textContent = `⏳ Ricalibrazione adattiva Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
     await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 3, null);
+    const prep = window.HandwritingOCR.locateAndPreprocessInSearchWindow(offscreenCanvas, targetBox, 7, null);
 
     const res = await ApiService.analyzePageImage(
       prep,
       p.page_number,
       AppState.contentTypes,
       { primaryTypeId: targetTypeId, referenceBox: targetBox },
-      targetBox
+      prep?.refinedBox || targetBox
     );
 
     p.detected_type_id = res.detected_type_id;
     p.ai_initial_value = res.detected_value;
     p.detected_value = res.detected_value;
     p.raw_text_read = res.raw_text_read;
-    p.bounding_box = { ...targetBox };
+    p.bounding_box = res.bounding_box ? { ...res.bounding_box } : { ...targetBox };
     p.fingerprint = prep?.fingerprint || null;
     p.confidence = res.confidence;
   }
@@ -735,10 +736,9 @@ async function reapplyLearnedRulesToRemainingPages() {
   btn.disabled = false;
   btn.classList.add('hidden');
   updateRunningSumDisplay();
-  alert('Pagine successive rianalizzate applicando i tracciati e le correzioni apprese!');
-  if (AppState.currentReviewIndex < AppState.pagesData.length - 1) {
-    loadReviewPage(AppState.currentReviewIndex + 1);
-  }
+  // Ricarica SUBITO la pagina attualmente visualizzata per mostrare il nuovo risultato!
+  await loadReviewPage(AppState.currentReviewIndex);
+  alert('Tutte le pagine non ancora verificate sono state rianalizzate con ricerca spaziale e tracciati appresi!');
 }
 
 function navigateReview(direction, skipSave = false) {

@@ -223,7 +223,7 @@ const ApiService = {
         detected_type_id: defaultTypeId,
         detected_value: res.detected_value,
         raw_text_read: res.raw_text_read,
-        bounding_box: { ...refBox },
+        bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...refBox },
         confidence: res.confidence,
         matchedByMemory: res.matchedByMemory || false,
         errorMsg: null
@@ -234,7 +234,7 @@ const ApiService = {
         detected_type_id: defaultTypeId,
         detected_value: 0,
         raw_text_read: 'ERRORE OCR',
-        bounding_box: { ...refBox },
+        bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...refBox },
         confidence: 0,
         matchedByMemory: false,
         errorMsg: err.message || 'Errore durante il riconoscimento locale'
