@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DocScanner — Gestione e Riconoscimento Moduli PDF (OCR Locale Statico)</title>
+  <title>DocScanner AI — Riconoscimento Scrittura a Mano Client-Side</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
 
@@ -32,7 +31,7 @@
     <!-- Barra Superiore -->
     <header class="topbar">
       <div class="brand">
-        <span class="brand-badge">OCR LOCALE</span>
+        <span class="brand-badge">CLIENT AI (TrOCR)</span>
         <h1>Scansione Certificati & Moduli</h1>
       </div>
       <nav class="nav-tabs">
@@ -55,7 +54,7 @@
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-2"><span>2</span> Calibrazione Pag. 1</div>
         <div class="step-line"></div>
-        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Locale</div>
+        <div class="step-item" id="ind-step-3"><span>3</span> Elaborazione Client AI</div>
         <div class="step-line"></div>
         <div class="step-item" id="ind-step-4"><span>4</span> Verifica Somme (Sì/No)</div>
         <div class="step-line"></div>
@@ -66,8 +65,8 @@
       <section id="step-upload" class="step-panel">
         <div class="upload-dropzone" id="dropzone">
           <div class="upload-icon">📄</div>
-          <h3>Trascina qui il file PDF con i moduli</h3>
-          <p>oppure clicca per selezionare un documento dal computer (OCR 100% locale nel browser, senza limiti)</p>
+          <h3>Trascina qui il file PDF con i moduli compilati a mano</h3>
+          <p>Motore neurale TrOCR eseguito 100% sul tuo browser (zero costi, zero limiti di pagine)</p>
           <input type="file" id="pdf-file-input" accept="application/pdf" class="hidden">
           <button class="btn btn-primary" onclick="document.getElementById('pdf-file-input').click()">Seleziona File PDF</button>
         </div>
@@ -89,7 +88,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per disegnare il riquadro attorno al numero: Tesseract.js rileggerà subito l'area e userà questa posizione sulle pagine successive.</span>
+              <span>🎯 <strong>Trascina col mouse sul foglio</strong> per inquadrare il numero scritto a mano: la rete neurale TrOCR lo leggerà subito sul tuo PC e applicherà questa posizione alle pagine successive.</span>
             </div>
             <div class="canvas-wrapper" id="cal-canvas-wrapper">
               <canvas id="cal-pdf-canvas"></canvas>
@@ -103,14 +102,14 @@
             <div class="card-header">
               <div class="header-with-status">
                 <h3>Riconoscimento Primo Certificato</h3>
-                <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+                <span id="cal-ocr-live-badge" class="status-pill status-ok hidden">AI in corso...</span>
               </div>
               <p>Verifica la posizione del riquadro e il valore estratto prima di avviare l'elaborazione su tutto il PDF.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata a Tesseract.js (Alto Contrasto)</span>
+                <span>🔍 Ritaglio Pulito Inviato a TrOCR (Client AI)</span>
                 <small id="cal-learned-count-badge" class="learned-badge">0 esempi appresi</small>
               </div>
               <canvas id="cal-crop-canvas" class="crop-canvas"></canvas>
@@ -149,7 +148,7 @@
       <section id="step-processing" class="step-panel hidden">
         <div class="processing-card">
           <div class="spinner"></div>
-          <h3>Elaborazione OCR locale in corso...</h3>
+          <h3>Elaborazione Client AI (TrOCR) in corso...</h3>
           <p id="proc-status-text">Avvio analisi...</p>
           <div class="progress-bar-track">
             <div id="proc-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
@@ -229,7 +228,7 @@
               </div>
             </div>
             <div class="viewer-subbar">
-              <span>🎯 Trascina sul foglio per riposizionare il riquadro: Tesseract.js rileggerà subito l'area selezionata.</span>
+              <span>🎯 Trascina sul foglio per riposizionare il riquadro: TrOCR rileggerà subito il numero scritto a mano.</span>
             </div>
             <div class="canvas-wrapper" id="rev-canvas-wrapper">
               <canvas id="rev-pdf-canvas"></canvas>
@@ -243,15 +242,15 @@
             <div class="card-header">
               <div class="header-with-status">
                 <h3>Valutazione Pagina #<span id="rev-inspector-page">1</span></h3>
-                <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">OCR in corso...</span>
+                <span id="rev-ocr-live-badge" class="status-pill status-ok hidden">AI in corso...</span>
               </div>
               <p>Controlla o modifica il valore e la tipologia per ciascuna pagina.</p>
             </div>
 
             <div class="crop-preview-box">
               <div class="crop-header">
-                <span>🔍 Area Inviata a Tesseract.js (Alto Contrasto)</span>
-                <small id="rev-session-learn-badge" class="learned-badge">0 correzioni apprese</small>
+                <span>🔍 Ritaglio Pulito Inviato a TrOCR (Client AI)</span>
+                <small id="rev-session-learn-badge" class="learned-badge">0 correzioni</small>
               </div>
               <canvas id="rev-crop-canvas" class="crop-canvas"></canvas>
             </div>
@@ -374,8 +373,8 @@
             </div>
 
             <div class="form-group">
-              <label for="bo-hints">Parole Chiave sul Modulo (per riconoscimento tipologia)</label>
-              <textarea id="bo-hints" rows="3" class="form-control" placeholder="Parole stampate presenti sul modulo..."></textarea>
+              <label for="bo-hints">Note / Parole Chiave sul Modulo</label>
+              <textarea id="bo-hints" rows="3" class="form-control" placeholder="Descrivi dove si trova il campo..."></textarea>
             </div>
 
             <div class="form-actions">
@@ -474,6 +473,7 @@
   </div>
 
   <script src="config.js"></script>
+  <script src="handwriting-ocr-engine.js"></script>
   <script src="api-service.js"></script>
   <script src="app.js"></script>
 </body>

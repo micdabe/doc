@@ -1,12 +1,11 @@
 /**
- * API SERVICE LAYER (SUPABASE DB + TESSERACT.JS IN LOCALE NEL BROWSER)
- * 100% statico, zero costi per chiamata, zero limiti di quota.
+ * API SERVICE LAYER (SUPABASE DB + HANDWRITING OCR CLIENT-SIDE)
+ * Zero costi per chiamata, zero limiti di quota, 100% statico sul web.
  */
 
 const ApiService = {
   supabase: null,
   config: {},
-  _worker: null,
 
   init() {
     const savedRaw = localStorage.getItem('docscanner_config');
@@ -48,45 +47,6 @@ const ApiService = {
     return this.init();
   },
 
-  async _getTesseractWorker() {
-    if (!this._worker && window.Tesseract) {
-      this._worker = await window.Tesseract.createWorker('eng');
-      await this._worker.setParameters({
-        tessedit_char_whitelist: '0123456789.,-€$m³Kgkh/ '
-      });
-    }
-    return this._worker;
-  },
-
-  _parseNumericValue(rawText) {
-    if (!rawText) return 0;
-    const matches = String(rawText).match(/[-+]?\d[\d.,\s]*\d|\d+/g);
-    if (!matches || matches.length === 0) return 0;
-
-    const best = matches.reduce((a, b) =>
-      a.replace(/\D/g, '').length >= b.replace(/\D/g, '').length ? a : b
-    );
-
-    let cleaned = best.replace(/\s+/g, '');
-    if (cleaned.includes('.') && cleaned.includes(',')) {
-      cleaned = cleaned.replace(/\./g, '').replace(',', '.');
-    } else if (/^\d{1,3}(\.\d{3})+$/.test(cleaned)) {
-      cleaned = cleaned.replace(/\./g, '');
-    } else if (cleaned.includes(',')) {
-      if (/^\d{1,3}(,\d{3})+$/.test(cleaned)) {
-        cleaned = cleaned.replace(/,/g, '');
-      } else {
-        cleaned = cleaned.replace(',', '.');
-      }
-    }
-
-    const num = parseFloat(cleaned);
-    return isNaN(num) ? 0 : num;
-  },
-
-  // =========================================================================
-  // 0. GESTIONE PASSWORD SUL DATABASE (Tabella: doc_app_settings)
-  // =========================================================================
   async verifyAppPassword(inputPassword) {
     if (!this.supabase) {
       throw new Error('Database Supabase non configurato in config.js.');
@@ -118,9 +78,6 @@ const ApiService = {
     return true;
   },
 
-  // =========================================================================
-  // 1. GESTIONE TIPOLOGIE (Tabella: doc_content_types)
-  // =========================================================================
   async getContentTypes() {
     if (!this.supabase) return [];
     const { data, error } = await this.supabase
@@ -204,9 +161,6 @@ const ApiService = {
     return true;
   },
 
-  // =========================================================================
-  // 2. GESTIONE SESSIONI E PAGINE (Tabelle: doc_batches, doc_pages)
-  // =========================================================================
   async createBatch(filename, totalPages) {
     if (!this.supabase) throw new Error('Database Supabase non connesso.');
     const { data, error } = await this.supabase
@@ -249,10 +203,8 @@ const ApiService = {
     return data || [];
   },
 
-  // =========================================================================
-  // 3. MOTORE OCR LOCALE IN TESSERACT.JS (ZERO CHIAMATE API / ZERO LIMITI)
-  // =========================================================================
-  async analyzePageImage(base64DataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, croppedBase64Url = null, searchWindowMeta = null) {
+  // Chiama il nuovo motore neurale client-side HandwritingOCR (TrOCR ONNX)
+  async analyzePageImage(croppedDataUrl, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null) {
     const defaultTypeId = (priorContext && priorContext.primaryTypeId) || (availableTypes && availableTypes[0]?.id) || null;
     const refBox = targetBox
       || (priorContext && priorContext.referenceBox)
@@ -260,43 +212,32 @@ const ApiService = {
       || { x: 55, y: 65, w: 25, h: 8 };
 
     try {
-      const worker = await this._getTesseractWorker();
-      const imageToRead = croppedBase64Url || base64DataUrl;
-      if (!imageToRead) {
-        throw new Error('Nessuna immagine disponibile per la lettura OCR.');
+      if (!window.HandwritingOCR) {
+        throw new Error('Modulo handwriting-ocr-engine.js non caricato.');
+      }
+      if (!croppedDataUrl) {
+        throw new Error('Nessuna area immagine ritagliata disponibile.');
       }
 
-      const ret = await worker.recognize(imageToRead);
-      const rawText = (ret?.data?.text || '').trim();
-      const confScore = typeof ret?.data?.confidence === 'number'
-        ? Math.max(0, Math.min(1, ret.data.confidence / 100))
-        : 0.75;
-
-      const parsedVal = this._parseNumericValue(rawText);
-
-      // Se l'utente ha spostato/disegnato un riquadro, cerca in una piccola finestra attorno ad esso nelle pagine successive
-      let nextBox = { ...refBox };
-      if (!targetBox && priorContext?.referenceBox) {
-        nextBox = { ...priorContext.referenceBox };
-      }
+      const res = await window.HandwritingOCR.recognize(croppedDataUrl, onStatusCallback);
 
       return {
         detected_type_id: defaultTypeId,
-        detected_value: parsedVal,
-        raw_text_read: rawText || '(vuoto)',
-        bounding_box: nextBox,
-        confidence: Number(confScore.toFixed(2)),
+        detected_value: res.detected_value,
+        raw_text_read: res.raw_text_read,
+        bounding_box: { ...refBox },
+        confidence: res.confidence,
         errorMsg: null
       };
     } catch (err) {
-      console.error('Errore Tesseract.js:', err);
+      console.error(`Errore HandwritingOCR Pagina ${pageNumber}:`, err);
       return {
         detected_type_id: defaultTypeId,
         detected_value: 0,
         raw_text_read: 'ERRORE OCR',
         bounding_box: { ...refBox },
         confidence: 0,
-        errorMsg: err.message || 'Errore durante la lettura OCR locale'
+        errorMsg: err.message || 'Errore durante il riconoscimento locale'
       };
     }
   }
