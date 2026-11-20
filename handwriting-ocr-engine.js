@@ -1,17 +1,18 @@
 /**
- * HANDWRITING OCR ENGINE v17 — PASSO 1 (ZERO FALLBACK, ZERO SPOSTAMENTI AUTOMATICI)
+ * HANDWRITING OCR ENGINE v18 — PASSO 1 (TrOCR BASE SUL RIQUADRO BLU CORSIVO, ZERO FALLBACK)
  * -------------------------------------------------------------------------
  * Regole ferree:
- * 1. Classificazione Tipologia (Testo Stampato): legge l'intera pagina con Tesseract.js.
- *    Se non trova corrispondenza con nessuna tipologia del Backoffice, restituisce typeId: null.
- *    Nessun fallback alla prima tipologia in lista.
- * 2. Lettura Valore Numerico: NESSUN fallback casuale e NESSUNO zero inventato.
- *    Se non c'è una lettura certa, restituisce detected_value: null ed errore esplicito.
- * 3. Posizione Riquadro: NESSUNO spostamento automatico del rettangolo calibrato.
+ * 1. Riquadro BLU (Tipologia in corsivo): usa Microsoft TrOCR (Xenova/trocr-base-handwritten)
+ *    per leggere la riga manoscritta in inglese/corsivo (es. "Drinking water 100 Gln for HDD")
+ *    e la confronta con le tipologie configurate nel Backoffice.
+ *    Se non trova corrispondenza chiara, restituisce typeId: null (ZERO fallback).
+ * 2. Riquadro ROSSO (Valore numerico): nel Passo 1 non inventa mai nulla e non mette 0;
+ *    restituisce detected_value: null con errore esplicito finché non si passa al Passo 2.
+ * 3. Nessuno spostamento automatico dei riquadri.
  */
 
 window.HandwritingOCR = {
-  _textWorker: null,
+  _trocrPipe: null,
   _initPromise: null,
   isReady: false,
 
@@ -28,47 +29,66 @@ window.HandwritingOCR = {
   },
 
   async init(onStatusCallback = null) {
-    if (this.isReady && this._textWorker) return true;
+    if (this.isReady && this._trocrPipe) return this._trocrPipe;
     if (this._initPromise) return this._initPromise;
 
     this._initPromise = (async () => {
-      if (!window.Tesseract) {
-        throw new Error('Libreria Tesseract.js non caricata in index.html.');
-      }
-      if (onStatusCallback) onStatusCallback('Avvio motore lettura testo stampato...');
-      this._textWorker = await window.Tesseract.createWorker('eng');
+      if (onStatusCallback) onStatusCallback('Caricamento modello TrOCR-base corsivo (solo 1ª volta)...');
+
+      const { pipeline, env } = await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+      env.allowLocalModels = false;
+      env.useBrowserCache = true;
+
+      this._trocrPipe = await pipeline('image-to-text', 'Xenova/trocr-base-handwritten', {
+        progress_callback: (prog) => {
+          if (onStatusCallback && prog && prog.status === 'progress' && prog.total) {
+            const pct = Math.round((prog.loaded / prog.total) * 100);
+            onStatusCallback(`Download TrOCR corsivo (${prog.file}): ${pct}%`);
+          }
+        }
+      });
+
       this.isReady = true;
-      if (onStatusCallback) onStatusCallback('Motore pronto!');
-      return true;
+      if (onStatusCallback) onStatusCallback('TrOCR corsivo pronto!');
+      return this._trocrPipe;
     })();
 
     return this._initPromise;
   },
 
+  // Distanza di Levenshtein per tollerare al massimo 1 lettera imprecisa su parole lunghe (>= 6 lettere)
+  _levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    if (Math.abs(m - n) > 2) return 99;
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      }
+    }
+    return dp[m][n];
+  },
+
   // ===========================================================================
-  // MOTORE 1: CLASSIFICAZIONE AUTOMATICA TIPOLOGIA DAL TESTO STAMPATO
+  // MOTORE 1: LETTURA CORSIVO (RIQUADRO BLU) CON TrOCR + MATCH RIGOROSO TIPOLOGIA
   // ===========================================================================
-  async classifyPageType(fullCanvas, availableTypes, onStatusCallback = null) {
-    if (!fullCanvas || !availableTypes || availableTypes.length === 0) {
-      return { typeId: null, matchedPhrase: '', score: 0, pageText: '' };
+  async classifyHandwrittenTypeCrop(typeCropDataUrl, availableTypes, onStatusCallback = null) {
+    if (!typeCropDataUrl || !availableTypes || availableTypes.length === 0) {
+      return { typeId: null, matchedPhrase: '', score: 0, rawText: '' };
     }
 
-    await this.init(onStatusCallback);
+    const pipe = await this.init(onStatusCallback);
+    const out = await pipe(typeCropDataUrl);
+    const rawText = (Array.isArray(out) && out[0]?.generated_text) ? out[0].generated_text.trim() : '';
+    const normText = rawText.toLowerCase().replace(/[^a-z0-9àèéìòù\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const textWords = normText.split(' ').filter(w => w.length >= 3);
 
-    const maxDim = 1200;
-    const scale = Math.max(fullCanvas.width, fullCanvas.height) > maxDim
-      ? maxDim / Math.max(fullCanvas.width, fullCanvas.height)
-      : 1;
-    const tmp = document.createElement('canvas');
-    tmp.width = Math.round(fullCanvas.width * scale);
-    tmp.height = Math.round(fullCanvas.height * scale);
-    const ctx = tmp.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, tmp.width, tmp.height);
-    ctx.drawImage(fullCanvas, 0, 0, tmp.width, tmp.height);
-
-    const ret = await this._textWorker.recognize(tmp.toDataURL('image/jpeg', 0.85));
-    const pageText = (ret?.data?.text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!normText) {
+      return { typeId: null, matchedPhrase: '', score: 0, rawText: '(vuoto)' };
+    }
 
     let bestTypeId = null;
     let bestScore = 0;
@@ -79,38 +99,45 @@ window.HandwritingOCR = {
       let matched = [];
 
       // 1. Frase esatta dal nome tipologia (es. "drinking water")
-      const nameClean = (t.name || '').toLowerCase().trim();
-      if (nameClean.length >= 4 && pageText.includes(nameClean)) {
+      const nameClean = (t.name || '').toLowerCase().replace(/[^a-z0-9àèéìòù\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      if (nameClean.length >= 4 && normText.includes(nameClean)) {
         score += 12;
         matched.push(nameClean);
       }
 
-      // 2. Frasi separate da virgola/punto e virgola negli hints (es. "drinking water, potable water")
+      // 2. Frasi esatte separate da virgola/punto e virgola negli hints
       const hintPhrases = (t.ai_hints || '')
         .toLowerCase()
         .split(/[,;\n]+/)
-        .map(s => s.trim())
+        .map(s => s.replace(/[^a-z0-9àèéìòù\s]/g, ' ').replace(/\s+/g, ' ').trim())
         .filter(s => s.length >= 3);
 
       for (const phrase of hintPhrases) {
-        if (pageText.includes(phrase)) {
+        if (normText.includes(phrase)) {
           score += 10;
-          matched.push(phrase);
+          if (!matched.includes(phrase)) matched.push(phrase);
         }
       }
 
-      // 3. Parole chiave significative (>= 4 caratteri) da nome, codice e hints
-      const rawWords = `${t.name || ''} ${t.code || ''} ${t.ai_hints || ''}`
+      // 3. Singole parole chiave (>= 4 lettere) da nome, codice e hints
+      const rawKeywords = `${t.name || ''} ${t.code || ''} ${t.ai_hints || ''}`
         .toLowerCase()
         .replace(/[^a-z0-9àèéìòù\s]/g, ' ')
         .split(/\s+/)
         .filter(w => w.length >= 4);
 
-      const uniqueWords = [...new Set(rawWords)];
-      for (const w of uniqueWords) {
-        if (pageText.includes(w)) {
-          score += 2;
-          if (!matched.includes(w)) matched.push(w);
+      const uniqueKeywords = [...new Set(rawKeywords)];
+      for (const kw of uniqueKeywords) {
+        if (normText.includes(kw)) {
+          score += 3;
+          if (!matched.includes(kw)) matched.push(kw);
+        } else if (kw.length >= 6) {
+          // Tollera al massimo 1 carattere impreciso di TrOCR su parole lunghe (es. "drinking" -> "drinkin")
+          const fuzzyHit = textWords.find(tw => this._levenshtein(tw, kw) <= 1);
+          if (fuzzyHit) {
+            score += 2;
+            if (!matched.includes(`${kw}~${fuzzyHit}`)) matched.push(`${kw}~${fuzzyHit}`);
+          }
         }
       }
 
@@ -121,17 +148,17 @@ window.HandwritingOCR = {
       }
     }
 
-    // Nessun fallback: se score < 4 (almeno una frase esatta o 2 parole chiave), restituisce NULL!
+    // ZERO FALLBACK: richiede almeno score >= 4 (frase esatta o almeno 2 parole chiave)
     return {
       typeId: bestScore >= 4 ? bestTypeId : null,
       matchedPhrase: bestPhrase,
       score: bestScore,
-      pageText
+      rawText
     };
   },
 
   // ===========================================================================
-  // PRE-PROCESSING PULITO DEL RIQUADRO (SENZA SPOSTAMENTI AUTOMATICI)
+  // PRE-PROCESSING PULITO DEL RIQUADRO (CON BORDO BIANCO IDEALE PER TrOCR)
   // ===========================================================================
   _extractCleanInkMatrix(srcCanvas, sx, sy, sw, sh) {
     const c = document.createElement('canvas');
@@ -157,30 +184,39 @@ window.HandwritingOCR = {
     const ink = new Float32Array(sw * sh);
     for (let p = 0; p < lums.length; p++) {
       const norm = ((lums[p] - minLum) / range) * 255;
-      ink[p] = norm > 205 ? 0 : Math.min(1, (210 - norm) / 155);
+      ink[p] = norm > 210 ? 0 : Math.min(1, (215 - norm) / 160);
     }
 
     return { ink, sw, sh };
   },
 
   _renderCleanInkToDataUrl(ink, sw, sh, previewCanvasId = null) {
+    const padX = Math.max(12, Math.round(sw * 0.08));
+    const padY = Math.max(10, Math.round(sh * 0.12));
+    const outW = sw + padX * 2;
+    const outH = sh + padY * 2;
+
     const canvas = previewCanvasId ? document.getElementById(previewCanvasId) : document.createElement('canvas');
     if (!canvas) return null;
 
-    canvas.width = sw;
-    canvas.height = sh;
+    canvas.width = outW;
+    canvas.height = outH;
     const ctx = canvas.getContext('2d');
-    const outImg = ctx.createImageData(sw, sh);
+    const outImg = ctx.createImageData(outW, outH);
     const outData = outImg.data;
     outData.fill(255);
 
-    for (let p = 0; p < ink.length; p++) {
-      const gray = Math.max(0, Math.min(255, Math.round(255 - ink[p] * 255)));
-      const idx = p * 4;
-      outData[idx] = gray;
-      outData[idx + 1] = gray;
-      outData[idx + 2] = gray;
-      outData[idx + 3] = 255;
+    for (let y = 0; y < sh; y++) {
+      const srcRow = y * sw;
+      const dstRow = (padY + y) * outW;
+      for (let x = 0; x < sw; x++) {
+        const gray = Math.max(0, Math.min(255, Math.round(255 - ink[srcRow + x] * 255)));
+        const idx = (dstRow + padX + x) * 4;
+        outData[idx] = gray;
+        outData[idx + 1] = gray;
+        outData[idx + 2] = gray;
+        outData[idx + 3] = 255;
+      }
     }
     ctx.putImageData(outImg, 0, 0);
     return canvas.toDataURL('image/png');
@@ -210,11 +246,11 @@ window.HandwritingOCR = {
   },
 
   learnFromCorrection() {
-    // Passo 2: qui implementeremo il riconoscimento dedicato alle cifre 0-9 una volta validato il Passo 1.
+    // Passo 2: qui integreremo la lettura rigorosa delle cifre 0-9 una volta validato il Passo 1.
   },
 
   // ===========================================================================
-  // MOTORE 2 (PASSO 1): NESSUN VALORE INVENTATO -> RESTITUISCE SEMPRE NULL + ERRORE
+  // MOTORE 2 (PASSO 1): ZERO INVENZIONI -> RESTITUISCE SEMPRE NULL + ERRORE
   // ===========================================================================
   async recognizeNumber(preprocessedObj) {
     return {
@@ -223,7 +259,7 @@ window.HandwritingOCR = {
       confidence: 0,
       bounding_box: preprocessedObj?.refinedBox || null,
       matchedByMemory: false,
-      valueError: 'Valore numerico non leggibile in modo affidabile: inseriscilo manualmente.'
+      valueError: 'Valore numerico non leggibile (Passo 2): inseriscilo manualmente.'
     };
   }
 };

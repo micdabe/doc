@@ -202,40 +202,44 @@ const ApiService = {
     return data || [];
   },
 
-  async analyzePageImage(preprocessedObj, pageNumber, availableTypes, priorContext = null, targetBox = null, onStatusCallback = null, fullCanvas = null) {
-    const refBox = targetBox
+  async analyzePageImage(valPreprocessedObj, typePreprocessedObj, pageNumber, availableTypes, priorContext = null, targetValBox = null, targetTypeBox = null, onStatusCallback = null) {
+    const refValBox = targetValBox
       || (priorContext && priorContext.referenceBox)
-      || { x: 55, y: 65, w: 25, h: 8 };
+      || { x: 48, y: 55, w: 12, h: 6 };
+    const refTypeBox = targetTypeBox
+      || (priorContext && priorContext.referenceTypeBox)
+      || { x: 15, y: 50, w: 45, h: 8 };
 
     try {
       if (!window.HandwritingOCR) {
         throw new Error('Modulo handwriting-ocr-engine.js non caricato.');
       }
-      if (!preprocessedObj) {
-        throw new Error('Nessuna area immagine ritagliata disponibile.');
-      }
 
-      // 1. Classificazione automatica Tipologia dal testo stampato (ZERO FALLBACK)
+      // 1. Classificazione Tipologia dal RIQUADRO BLU (Corsivo con TrOCR — ZERO FALLBACK)
       let detectedTypeId = null;
       let typeMatchNote = '';
-      let pageText = '';
+      let handwrittenTypeText = '';
       const errors = [];
 
-      if (fullCanvas && availableTypes && availableTypes.length > 0) {
-        const cls = await window.HandwritingOCR.classifyPageType(fullCanvas, availableTypes, onStatusCallback);
-        pageText = cls.pageText || '';
+      if (typePreprocessedObj && typePreprocessedObj.dataUrl && availableTypes && availableTypes.length > 0) {
+        const cls = await window.HandwritingOCR.classifyHandwrittenTypeCrop(
+          typePreprocessedObj.dataUrl,
+          availableTypes,
+          onStatusCallback
+        );
+        handwrittenTypeText = cls.rawText || '(vuoto)';
         if (cls.typeId) {
           detectedTypeId = cls.typeId;
           typeMatchNote = `Tipo riconosciuto: "${cls.matchedPhrase}" (score ${cls.score})`;
         } else {
-          errors.push('Tipologia NON riconosciuta dal testo stampato (assegnazione manuale richiesta).');
+          errors.push(`Tipologia NON riconosciuta dal corsivo (letto: "${handwrittenTypeText}"). Assegnazione manuale richiesta.`);
         }
       } else {
-        errors.push('Impossibile leggere il testo stampato della pagina.');
+        errors.push('Riquadro blu della Tipologia non definito.');
       }
 
-      // 2. Lettura numero (ZERO FALLBACK: null se non leggibile)
-      const res = await window.HandwritingOCR.recognizeNumber(preprocessedObj, onStatusCallback);
+      // 2. Valore numerico (Passo 1: ZERO FALLBACK -> sempre null + errore)
+      const res = await window.HandwritingOCR.recognizeNumber(valPreprocessedObj);
       if (res.detected_value === null) {
         errors.push(res.valueError || 'Valore numerico NON riconosciuto (inserimento manuale richiesto).');
       }
@@ -244,8 +248,9 @@ const ApiService = {
         detected_type_id: detectedTypeId,
         detected_value: res.detected_value,
         raw_text_read: typeMatchNote ? `${res.raw_text_read} | ${typeMatchNote}` : res.raw_text_read,
-        pageText,
-        bounding_box: { ...refBox },
+        pageText: handwrittenTypeText,
+        bounding_box: { ...refValBox },
+        type_box: { ...refTypeBox },
         confidence: res.confidence,
         matchedByMemory: false,
         errorMsg: errors.length > 0 ? errors.join(' ') : null
@@ -257,7 +262,8 @@ const ApiService = {
         detected_value: null,
         raw_text_read: 'ERRORE OCR',
         pageText: '',
-        bounding_box: { ...refBox },
+        bounding_box: { ...refValBox },
+        type_box: { ...refTypeBox },
         confidence: 0,
         matchedByMemory: false,
         errorMsg: err.message || 'Errore durante il riconoscimento locale'

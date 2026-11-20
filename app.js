@@ -12,7 +12,10 @@ const AppState = {
   currentReviewIndex: 0,
   sessionCorrections: [],
   latestCalibratedTypeId: null,
-  latestCalibratedBox: null
+  latestCalibratedBox: null,
+  latestCalibratedTypeBox: null,
+  calDrawMode: 'type',
+  revDrawMode: 'type'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -32,42 +35,98 @@ document.addEventListener('DOMContentLoaded', () => {
   setupScannerWorkflow();
   setupBackoffice();
 
+  setupDrawModeToggles();
+
   setupBoundingBoxDrawing(
     'cal-canvas-wrapper',
-    'cal-bbox',
+    () => AppState.calDrawMode === 'type' ? 'cal-type-bbox' : 'cal-bbox',
     (newBox) => {
       if (!AppState.pagesData[0]) {
-        AppState.pagesData[0] = { page_number: 1, rotation: 0, bounding_box: newBox };
+        AppState.pagesData[0] = { page_number: 1, rotation: 0, bounding_box: newBox, type_box: newBox };
       }
-      AppState.pagesData[0].bounding_box = newBox;
-      AppState.latestCalibratedBox = { ...newBox };
-      document.getElementById('cal-coords-display').textContent =
-        `X:${newBox.x}% Y:${newBox.y}% W:${newBox.w}% H:${newBox.h}%`;
-      const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 3, 'cal-crop-canvas');
-      if (prep) AppState.pagesData[0].fingerprint = prep.fingerprint;
+      if (AppState.calDrawMode === 'type') {
+        AppState.pagesData[0].type_box = newBox;
+        AppState.latestCalibratedTypeBox = { ...newBox };
+        window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 1, 'cal-type-crop-canvas');
+      } else {
+        AppState.pagesData[0].bounding_box = newBox;
+        AppState.latestCalibratedBox = { ...newBox };
+        window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), newBox, 1, 'cal-crop-canvas');
+      }
+      updateCalCoordsDisplay();
     },
-    async (finalBox) => {
-      await runTargetedOcrOnCalibrationBox(finalBox);
+    async () => {
+      if (AppState.pagesData[0]) {
+        await runTargetedOcrOnCalibrationBox(AppState.pagesData[0].bounding_box, AppState.pagesData[0].type_box);
+      }
     }
   );
 
   setupBoundingBoxDrawing(
     'rev-canvas-wrapper',
-    'rev-bbox',
+    () => AppState.revDrawMode === 'type' ? 'rev-type-bbox' : 'rev-bbox',
     (newBox) => {
       const pageObj = AppState.pagesData[AppState.currentReviewIndex];
-      if (pageObj) {
+      if (!pageObj) return;
+      if (AppState.revDrawMode === 'type') {
+        pageObj.type_box = newBox;
+        AppState.latestCalibratedTypeBox = { ...newBox };
+        window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 1, 'rev-type-crop-canvas');
+      } else {
         pageObj.bounding_box = newBox;
         AppState.latestCalibratedBox = { ...newBox };
-        const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 3, 'rev-crop-canvas');
-        if (prep) pageObj.fingerprint = prep.fingerprint;
+        window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), newBox, 1, 'rev-crop-canvas');
       }
     },
-    async (finalBox) => {
-      await runTargetedOcrOnReviewBox(finalBox);
+    async () => {
+      const pageObj = AppState.pagesData[AppState.currentReviewIndex];
+      if (pageObj) {
+        await runTargetedOcrOnReviewBox(pageObj.bounding_box, pageObj.type_box);
+      }
     }
   );
 });
+
+function setupDrawModeToggles() {
+  const calTypeBtn = document.getElementById('btn-cal-mode-type');
+  const calValBtn = document.getElementById('btn-cal-mode-val');
+  if (calTypeBtn && calValBtn) {
+    calTypeBtn.addEventListener('click', () => {
+      AppState.calDrawMode = 'type';
+      calTypeBtn.classList.add('active-blue');
+      calValBtn.classList.remove('active-red');
+    });
+    calValBtn.addEventListener('click', () => {
+      AppState.calDrawMode = 'value';
+      calValBtn.classList.add('active-red');
+      calTypeBtn.classList.remove('active-blue');
+    });
+  }
+
+  const revTypeBtn = document.getElementById('btn-rev-mode-type');
+  const revValBtn = document.getElementById('btn-rev-mode-val');
+  if (revTypeBtn && revValBtn) {
+    revTypeBtn.addEventListener('click', () => {
+      AppState.revDrawMode = 'type';
+      revTypeBtn.classList.add('active-blue');
+      revValBtn.classList.remove('active-red');
+    });
+    revValBtn.addEventListener('click', () => {
+      AppState.revDrawMode = 'value';
+      revValBtn.classList.add('active-red');
+      revTypeBtn.classList.remove('active-blue');
+    });
+  }
+}
+
+function updateCalCoordsDisplay() {
+  const p = AppState.pagesData[0];
+  if (!p) return;
+  const tb = p.type_box || { x: 0, y: 0, w: 0, h: 0 };
+  const vb = p.bounding_box || { x: 0, y: 0, w: 0, h: 0 };
+  document.getElementById('cal-coords-display').textContent =
+    `BLU(Tipo): X:${tb.x}% Y:${tb.y}% W:${tb.w}% H:${tb.h}% | ROSSO(Val): X:${vb.x}% Y:${vb.y}% W:${vb.w}% H:${vb.h}%`;
+}
 
 function setupLogin() {
   const loginScreen = document.getElementById('login-screen');
@@ -322,24 +381,27 @@ function setupScannerWorkflow() {
   document.getElementById('btn-export-csv').addEventListener('click', exportReportCsv);
 }
 
-async function runTargetedOcrOnCalibrationBox(box) {
-  if (!AppState.pagesData[0] || !box) return;
+async function runTargetedOcrOnCalibrationBox(valBox, typeBox = null) {
+  if (!AppState.pagesData[0] || !valBox) return;
+  const activeTypeBox = typeBox || AppState.pagesData[0].type_box || { x: 15, y: 50, w: 45, h: 8 };
   const liveBadge = document.getElementById('cal-ocr-live-badge');
-  liveBadge.textContent = 'Lettura AI adattiva...';
+  liveBadge.textContent = 'Lettura TrOCR corsivo...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('cal-pdf-canvas');
-  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 3, 'cal-crop-canvas');
+  const valPrep = window.HandwritingOCR.preprocessCrop(fullCanvas, valBox, 1, 'cal-crop-canvas');
+  const typePrep = window.HandwritingOCR.preprocessCrop(fullCanvas, activeTypeBox, 1, 'cal-type-crop-canvas');
 
   const selectedTypeId = document.getElementById('cal-type-select').value;
   const res = await ApiService.analyzePageImage(
-    preprocessed,
+    valPrep,
+    typePrep,
     1,
     AppState.contentTypes,
-    { primaryTypeId: selectedTypeId, referenceBox: box },
-    box,
-    (statusMsg) => { liveBadge.textContent = statusMsg; },
-    fullCanvas
+    { primaryTypeId: selectedTypeId, referenceBox: valBox, referenceTypeBox: activeTypeBox },
+    valBox,
+    activeTypeBox,
+    (statusMsg) => { liveBadge.textContent = statusMsg; }
   );
 
   showOcrErrorBanner('cal-ocr-error-banner', res.errorMsg);
@@ -352,9 +414,11 @@ async function runTargetedOcrOnCalibrationBox(box) {
   AppState.pagesData[0].pageText = res.pageText || '';
   AppState.pagesData[0].errorMsg = res.errorMsg || null;
   AppState.pagesData[0].confidence = res.confidence;
-  AppState.pagesData[0].bounding_box = { ...box };
-  AppState.pagesData[0].digitBlobs = preprocessed?.digitBlobs || [];
-  AppState.latestCalibratedBox = { ...box };
+  AppState.pagesData[0].bounding_box = { ...valBox };
+  AppState.pagesData[0].type_box = { ...activeTypeBox };
+  AppState.pagesData[0].digitBlobs = valPrep?.digitBlobs || [];
+  AppState.latestCalibratedBox = { ...valBox };
+  AppState.latestCalibratedTypeBox = { ...activeTypeBox };
 
   const matchedType = AppState.contentTypes.find(t => t.id === res.detected_type_id);
   document.getElementById('cal-unit-label').textContent = matchedType?.unit ? `(${matchedType.unit})` : '';
@@ -367,26 +431,29 @@ async function runTargetedOcrOnCalibrationBox(box) {
   setTimeout(() => liveBadge.classList.add('hidden'), 1500);
 }
 
-async function runTargetedOcrOnReviewBox(box) {
+async function runTargetedOcrOnReviewBox(valBox, typeBox = null) {
   const pageObj = AppState.pagesData[AppState.currentReviewIndex];
-  if (!pageObj || !box) return;
+  if (!pageObj || !valBox) return;
+  const activeTypeBox = typeBox || pageObj.type_box || AppState.latestCalibratedTypeBox || { x: 15, y: 50, w: 45, h: 8 };
 
   const liveBadge = document.getElementById('rev-ocr-live-badge');
-  liveBadge.textContent = 'Lettura AI adattiva...';
+  liveBadge.textContent = 'Lettura TrOCR corsivo...';
   liveBadge.classList.remove('hidden');
 
   const fullCanvas = document.getElementById('rev-pdf-canvas');
-  const preprocessed = window.HandwritingOCR.preprocessCrop(fullCanvas, box, 3, 'rev-crop-canvas');
+  const valPrep = window.HandwritingOCR.preprocessCrop(fullCanvas, valBox, 1, 'rev-crop-canvas');
+  const typePrep = window.HandwritingOCR.preprocessCrop(fullCanvas, activeTypeBox, 1, 'rev-type-crop-canvas');
 
   const selectedTypeId = document.getElementById('rev-type-select').value;
   const res = await ApiService.analyzePageImage(
-    preprocessed,
+    valPrep,
+    typePrep,
     pageObj.page_number,
     AppState.contentTypes,
-    { primaryTypeId: selectedTypeId, referenceBox: box },
-    box,
-    (statusMsg) => { liveBadge.textContent = statusMsg; },
-    fullCanvas
+    { primaryTypeId: selectedTypeId, referenceBox: valBox, referenceTypeBox: activeTypeBox },
+    valBox,
+    activeTypeBox,
+    (statusMsg) => { liveBadge.textContent = statusMsg; }
   );
 
   showOcrErrorBanner('rev-ocr-error-banner', res.errorMsg);
@@ -398,10 +465,12 @@ async function runTargetedOcrOnReviewBox(box) {
   pageObj.pageText = res.pageText || '';
   pageObj.errorMsg = res.errorMsg || null;
   pageObj.confidence = res.confidence;
-  pageObj.bounding_box = { ...box };
-  pageObj.digitBlobs = preprocessed?.digitBlobs || [];
+  pageObj.bounding_box = { ...valBox };
+  pageObj.type_box = { ...activeTypeBox };
+  pageObj.digitBlobs = valPrep?.digitBlobs || [];
   pageObj.box_moved_by_user = true;
-  AppState.latestCalibratedBox = { ...box };
+  AppState.latestCalibratedBox = { ...valBox };
+  AppState.latestCalibratedTypeBox = { ...activeTypeBox };
 
   const matchedType = AppState.contentTypes.find(t => t.id === res.detected_type_id);
   document.getElementById('rev-value-input').value = res.detected_value !== null ? res.detected_value : '';
@@ -438,7 +507,7 @@ async function rotateCalibrationPage(deltaDegrees) {
   document.getElementById('cal-rot-meta').textContent = formatRotationLabel(newRot);
 
   await renderPdfPageToCanvas(1, 'cal-pdf-canvas', newRot);
-  await runTargetedOcrOnCalibrationBox(AppState.pagesData[0].bounding_box);
+  await runTargetedOcrOnCalibrationBox(AppState.pagesData[0].bounding_box, AppState.pagesData[0].type_box);
 }
 
 async function rotateReviewPage(deltaDegrees) {
@@ -451,7 +520,7 @@ async function rotateReviewPage(deltaDegrees) {
   document.getElementById('rev-rot-meta').textContent = formatRotationLabel(newRot);
 
   await renderPdfPageToCanvas(pageObj.page_number, 'rev-pdf-canvas', newRot);
-  await runTargetedOcrOnReviewBox(pageObj.bounding_box);
+  await runTargetedOcrOnReviewBox(pageObj.bounding_box, pageObj.type_box);
 }
 
 async function handlePdfFileSelected(file) {
@@ -472,36 +541,40 @@ async function handlePdfFileSelected(file) {
   AppState.pagesData = new Array(totalPages);
 
   const defaultType = AppState.contentTypes[0];
-  const initialBox = defaultType?.expected_box || { x: 60, y: 70, w: 20, h: 7 };
+  const initialBox = defaultType?.expected_box ? { x: defaultType.expected_box.x, y: defaultType.expected_box.y, w: defaultType.expected_box.w, h: defaultType.expected_box.h } : { x: 48, y: 55, w: 12, h: 6 };
+  const initialTypeBox = defaultType?.expected_box?.type_box || { x: 15, y: 50, w: 45, h: 8 };
 
   AppState.pagesData[0] = {
     page_number: 1,
-    detected_type_id: defaultType?.id || null,
-    ai_initial_value: 0,
-    detected_value: 0,
+    detected_type_id: null,
+    ai_initial_value: null,
+    detected_value: null,
     raw_text_read: '',
+    pageText: '',
     bounding_box: { ...initialBox },
-    fingerprint: null,
+    type_box: { ...initialTypeBox },
+    digitBlobs: [],
     rotation: 0,
     confidence: 0,
     is_verified: false,
     notes: ''
   };
-  AppState.latestCalibratedTypeId = defaultType?.id || null;
+  AppState.latestCalibratedTypeId = null;
   AppState.latestCalibratedBox = { ...initialBox };
+  AppState.latestCalibratedTypeBox = { ...initialTypeBox };
 
   populateTypeSelects();
   document.getElementById('cal-total-pages').textContent = totalPages;
   document.getElementById('cal-rot-badge').textContent = '0°';
   document.getElementById('cal-rot-meta').textContent = formatRotationLabel(0);
-  document.getElementById('cal-coords-display').textContent =
-    `X:${initialBox.x}% Y:${initialBox.y}% W:${initialBox.w}% H:${initialBox.h}%`;
+  updateCalCoordsDisplay();
   applyBoundingBox('cal-bbox', initialBox);
+  applyBoundingBox('cal-type-bbox', initialTypeBox);
 
   setScannerStep(2);
 
   await renderPdfPageToCanvas(1, 'cal-pdf-canvas', 0);
-  await runTargetedOcrOnCalibrationBox(initialBox);
+  await runTargetedOcrOnCalibrationBox(initialBox, initialTypeBox);
 }
 
 async function processRemainingPages() {
@@ -517,6 +590,7 @@ async function processRemainingPages() {
   }
   const confirmedValue = parseFloat(rawValStr);
   const confirmedBox = { ...AppState.pagesData[0].bounding_box };
+  const confirmedTypeBox = { ...(AppState.pagesData[0].type_box || { x: 15, y: 50, w: 45, h: 8 }) };
   const inheritedRotation = AppState.pagesData[0].rotation || 0;
 
   const prepPage1 = window.HandwritingOCR.preprocessCrop(document.getElementById('cal-pdf-canvas'), confirmedBox, 2, null);
@@ -539,7 +613,7 @@ async function processRemainingPages() {
     type_id: confirmedTypeId,
     ai_initial_value: AppState.pagesData[0].ai_initial_value,
     confirmed_value: confirmedValue,
-    box: confirmedBox,
+    box: { ...confirmedBox, type_box: confirmedTypeBox },
     note: 'Calibrazione Pagina 1'
   };
   AppState.sessionCorrections.push(correctionRecord);
@@ -567,16 +641,18 @@ async function processRemainingPages() {
     statusText.textContent = `Analisi adattiva Pagina ${p} di ${total} (con memoria visiva calligrafia attiva)...`;
 
     await renderPdfPageToElement(p, offscreenCanvas, inheritedRotation);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 1, null);
+    const valPrep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedBox, 1, null);
+    const typePrep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, confirmedTypeBox, 1, null);
 
     const res = await ApiService.analyzePageImage(
-      prep,
+      valPrep,
+      typePrep,
       p,
       AppState.contentTypes,
-      { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox },
-      prep?.refinedBox || confirmedBox,
-      null,
-      offscreenCanvas
+      { primaryTypeId: confirmedTypeId, referenceBox: confirmedBox, referenceTypeBox: confirmedTypeBox },
+      confirmedBox,
+      confirmedTypeBox,
+      null
     );
 
     AppState.pagesData[p - 1] = {
@@ -587,8 +663,9 @@ async function processRemainingPages() {
       raw_text_read: res.raw_text_read,
       pageText: res.pageText || '',
       errorMsg: res.errorMsg || null,
-      bounding_box: res.bounding_box ? { ...res.bounding_box } : { ...confirmedBox },
-      digitBlobs: prep?.digitBlobs || [],
+      bounding_box: { ...confirmedBox },
+      type_box: { ...confirmedTypeBox },
+      digitBlobs: valPrep?.digitBlobs || [],
       rotation: inheritedRotation,
       confidence: res.confidence,
       is_verified: false,
@@ -672,7 +749,11 @@ async function loadReviewPage(index) {
 
   document.getElementById('rev-bbox-label').textContent = `${matchedType?.code || 'Valore'}: ${pageData.detected_value}`;
   applyBoundingBox('rev-bbox', pageData.bounding_box);
-  const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 3, 'rev-crop-canvas');
+  const activeRevTypeBox = pageData.type_box || AppState.latestCalibratedTypeBox || { x: 15, y: 50, w: 45, h: 8 };
+  pageData.type_box = { ...activeRevTypeBox };
+  applyBoundingBox('rev-type-bbox', activeRevTypeBox);
+  const prep = window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), pageData.bounding_box, 1, 'rev-crop-canvas');
+  window.HandwritingOCR.preprocessCrop(document.getElementById('rev-pdf-canvas'), activeRevTypeBox, 1, 'rev-type-crop-canvas');
   if (prep) pageData.digitBlobs = prep.digitBlobs;
   updateRunningSumDisplay();
 }
@@ -751,25 +832,31 @@ async function reapplyLearnedRulesToRemainingPages() {
     if (p.is_verified) continue;
 
     btn.textContent = `⏳ Ricalibrazione adattiva Pagina ${p.page_number} di ${AppState.pagesData.length}...`;
+    const targetTypeBox = AppState.latestCalibratedTypeBox || p.type_box || { x: 15, y: 50, w: 45, h: 8 };
     await renderPdfPageToElement(p.page_number, offscreenCanvas, p.rotation || 0);
-    const prep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 1, null);
+    const valPrep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetBox, 1, null);
+    const typePrep = window.HandwritingOCR.preprocessCrop(offscreenCanvas, targetTypeBox, 1, null);
 
     const res = await ApiService.analyzePageImage(
-      prep,
+      valPrep,
+      typePrep,
       p.page_number,
       AppState.contentTypes,
-      { primaryTypeId: targetTypeId, referenceBox: targetBox },
-      prep?.refinedBox || targetBox,
-      null,
-      offscreenCanvas
+      { primaryTypeId: targetTypeId, referenceBox: targetBox, referenceTypeBox: targetTypeBox },
+      targetBox,
+      targetTypeBox,
+      null
     );
 
     p.detected_type_id = res.detected_type_id;
     p.ai_initial_value = res.detected_value;
     p.detected_value = res.detected_value;
     p.raw_text_read = res.raw_text_read;
-    p.bounding_box = res.bounding_box ? { ...res.bounding_box } : { ...targetBox };
-    p.digitBlobs = prep?.digitBlobs || [];
+    p.pageText = res.pageText || '';
+    p.errorMsg = res.errorMsg || null;
+    p.bounding_box = { ...targetBox };
+    p.type_box = { ...targetTypeBox };
+    p.digitBlobs = valPrep?.digitBlobs || [];
     p.confidence = res.confidence;
   }
 
@@ -924,7 +1011,7 @@ function applyBoundingBox(bboxElementId, box) {
   el.style.height = `${box.h}%`;
 }
 
-function setupBoundingBoxDrawing(wrapperId, bboxId, onBoxDragging, onBoxReleased) {
+function setupBoundingBoxDrawing(wrapperId, bboxIdOrGetter, onBoxDragging, onBoxReleased) {
   const wrapper = document.getElementById(wrapperId);
   let isDrawing = false;
   let hasDragged = false;
@@ -955,7 +1042,8 @@ function setupBoundingBoxDrawing(wrapperId, bboxId, onBoxDragging, onBoxReleased
       w: Math.max(3, Math.round(Math.abs(currX - startX))),
       h: Math.max(2, Math.round(Math.abs(currY - startY)))
     };
-    applyBoundingBox(bboxId, latestBox);
+    const activeBboxId = typeof bboxIdOrGetter === 'function' ? bboxIdOrGetter() : bboxIdOrGetter;
+    applyBoundingBox(activeBboxId, latestBox);
     if (onBoxDragging) onBoxDragging(latestBox);
   });
 
